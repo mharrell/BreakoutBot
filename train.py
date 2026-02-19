@@ -10,7 +10,7 @@ from stable_baselines3.common.logger import configure
 gym.register_envs(ale_py)
 
 # Change this when starting a new training regime
-RUN_NAME = "PPO_8"
+RUN_NAME = "PPO_9"
 
 # 8 parallel environments to collect experience faster
 env = make_atari_env("ALE/Breakout-v5", n_envs=8, seed=42)
@@ -38,7 +38,7 @@ model = PPO(
     batch_size=256,
     n_epochs=4,
     gamma=0.99,
-    learning_rate=2.5e-4,
+    learning_rate=1.25e-4,
     ent_coef=0.003,
     vf_coef=0.5,
     clip_range=0.2,
