@@ -10,10 +10,10 @@ from stable_baselines3.common.logger import configure
 gym.register_envs(ale_py)
 
 # Change this when starting a new training regime
-RUN_NAME = "PPO_11"
+RUN_NAME = "PPO_13"
 
-# 8 parallel environments to collect experience faster
-env = make_atari_env("ALE/Breakout-v5", n_envs=8, seed=42)
+# 32 parallel environments to collect experience faster
+env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=42)
 env = VecFrameStack(env, n_stack=4)
 
 eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=123)
@@ -26,7 +26,8 @@ eval_callback = EvalCallback(
     eval_freq=10_000,  # changed from 50_000
     deterministic=True,
     render=False,
-    verbose=1          # added this
+    verbose=1,          # added this
+
 )
 
 model = PPO(
@@ -35,14 +36,14 @@ model = PPO(
     verbose=1,
     tensorboard_log=f"./tensorboard/{RUN_NAME}",
     n_steps=128,
-    batch_size=256,
+    batch_size=1024,
     n_epochs=4,
     gamma=0.99,
-    learning_rate=1.25e-4,
+    learning_rate=2.5e-4,
     ent_coef=0.006,
     vf_coef=0.5,
     clip_range=0.2,
-    policy_kwargs=dict(net_arch=[512, 512])
+    policy_kwargs = dict(net_arch=[64, 64])
 )
 
 # Resume from checkpoint if it exists
@@ -53,7 +54,7 @@ if os.path.exists(checkpoint_path):
                      custom_objects={"ent_coef": 0.006,
                                      "vf_coef": 0.5,
                                      "clip_range": 0.2,
-                                     "policy_kwargs": dict(net_arch=[512, 512])})
+                                     "policy_kwargs": dict(net_arch=[64, 64])})
     model.set_logger(configure(f"./tensorboard/{RUN_NAME}", ["tensorboard", "stdout"]))
 else:
     print("Starting fresh...")
