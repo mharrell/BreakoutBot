@@ -29,6 +29,7 @@ A deep reinforcement learning agent trained to play Atari Breakout using PPO.
   lacked capacity to learn more complex strategies. Kept ent_coef=0.003, clip_range=0.2 from run 3
 - Run 5: (PPO_9) run 4 stalled out around 25 after 2.5 million timesteps. Decreased learning rate to 1.25e-4
 - Run 6: entropy loss dropped quickly in run 5. changed ent_coef=0.006
-- Run 7: Increasing the network didn't seem to help. Lowered it back to 64,64 but inceased the number of envs and batch size.
+- Run 7: Increasing the network didn't seem to help. Lowered it back to 64,64 but increased the number of envs and batch size.
 - Run 8: training died fast. reset learning rate to 2.5e-4. 
+- Run 9: We appear to be getting somewhere. increased total timesteps to 15 million.
 

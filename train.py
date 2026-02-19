@@ -23,7 +23,7 @@ eval_callback = EvalCallback(
     eval_env,
     best_model_save_path="./models/",
     log_path="./logs/",
-    eval_freq=10_000,  # changed from 50_000
+    eval_freq=50_000,
     deterministic=True,
     render=False,
     verbose=1,          # added this
@@ -60,7 +60,7 @@ else:
     print("Starting fresh...")
 
 model.learn(
-    total_timesteps=5_000_000,
+    total_timesteps=15_000_000,
     callback=eval_callback
 )
 
