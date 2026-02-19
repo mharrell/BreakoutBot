@@ -26,4 +26,6 @@ A deep reinforcement learning agent trained to play Atari Breakout using PPO.
   regardless of exploration tuning, suggesting the default [64, 64] network 
   lacked capacity to learn more complex strategies. Kept ent_coef=0.003, clip_range=0.2 from run 3
 - Run 5: (PPO_9) run 4 stalled out around 25 after 2.5 million timesteps. Decreased learning rate to 1.25e-4
+- Run 6: entropy loss dropped quickly in run 5. changed ent_coef=0.006
+- 
 

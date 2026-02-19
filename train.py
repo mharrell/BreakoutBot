@@ -10,7 +10,7 @@ from stable_baselines3.common.logger import configure
 gym.register_envs(ale_py)
 
 # Change this when starting a new training regime
-RUN_NAME = "PPO_9"
+RUN_NAME = "PPO_11"
 
 # 8 parallel environments to collect experience faster
 env = make_atari_env("ALE/Breakout-v5", n_envs=8, seed=42)
@@ -39,7 +39,7 @@ model = PPO(
     n_epochs=4,
     gamma=0.99,
     learning_rate=1.25e-4,
-    ent_coef=0.003,
+    ent_coef=0.006,
     vf_coef=0.5,
     clip_range=0.2,
     policy_kwargs=dict(net_arch=[512, 512])
@@ -50,7 +50,7 @@ checkpoint_path = "models/best_model.zip"
 if os.path.exists(checkpoint_path):
     print("Loading existing model...")
     model = PPO.load(checkpoint_path, env=env,
-                     custom_objects={"ent_coef": 0.003,
+                     custom_objects={"ent_coef": 0.006,
                                      "vf_coef": 0.5,
                                      "clip_range": 0.2,
                                      "policy_kwargs": dict(net_arch=[512, 512])})
