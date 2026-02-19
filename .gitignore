@@ -1,7 +1,16 @@
+<<<<<<< HEAD
 .venv/
 models/
 logs/
 tensorboard/
 __pycache__/
 *.zip
+=======
+.venv/
+models/
+logs/
+tensorboard/
+__pycache__/
+*.zip
+>>>>>>> 1b0536408e2c5b23e1fd0aa7fa002620a1b19fbc
 *.pyc

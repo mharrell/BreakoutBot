@@ -23,10 +23,10 @@ eval_callback = EvalCallback(
     eval_env,
     best_model_save_path="./models/",
     log_path="./logs/",
-    eval_freq=10_000,
+    eval_freq=10_000,  # changed from 50_000
     deterministic=True,
     render=False,
-    verbose=1
+    verbose=1          # added this
 )
 
 model = PPO(

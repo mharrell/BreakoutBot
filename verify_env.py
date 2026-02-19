@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import gymnasium as gym
 import ale_py
 
@@ -12,4 +13,20 @@ for _ in range(200):
     if terminated or truncated:
         env.reset()
 
+=======
+import gymnasium as gym
+import ale_py
+
+gym.register_envs(ale_py)
+
+env = gym.make("ALE/Breakout-v5", render_mode="human")
+obs, info = env.reset()
+
+for _ in range(200):
+    action = env.action_space.sample()
+    obs, reward, terminated, truncated, info = env.step(action)
+    if terminated or truncated:
+        env.reset()
+
+>>>>>>> 1b0536408e2c5b23e1fd0aa7fa002620a1b19fbc
 env.close()
