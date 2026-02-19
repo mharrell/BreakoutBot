@@ -10,7 +10,7 @@ from stable_baselines3.common.logger import configure
 gym.register_envs(ale_py)
 
 # Change this when starting a new training regime
-RUN_NAME = "PPO_7"
+RUN_NAME = "PPO_8"
 
 # 8 parallel environments to collect experience faster
 env = make_atari_env("ALE/Breakout-v5", n_envs=8, seed=42)
@@ -42,6 +42,7 @@ model = PPO(
     ent_coef=0.003,
     vf_coef=0.5,
     clip_range=0.2,
+    policy_kwargs=dict(net_arch=[512, 512])
 )
 
 # Resume from checkpoint if it exists
@@ -51,7 +52,8 @@ if os.path.exists(checkpoint_path):
     model = PPO.load(checkpoint_path, env=env,
                      custom_objects={"ent_coef": 0.003,
                                      "vf_coef": 0.5,
-                                     "clip_range": 0.2})
+                                     "clip_range": 0.2,
+                                     "policy_kwargs": dict(net_arch=[512, 512])})
     model.set_logger(configure(f"./tensorboard/{RUN_NAME}", ["tensorboard", "stdout"]))
 else:
     print("Starting fresh...")
