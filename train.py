@@ -60,7 +60,7 @@ else:
     print("Starting fresh...")
 
 model.learn(
-    total_timesteps=15_000_000,
+    total_timesteps=25_000_000,
     callback=eval_callback
 )
 
