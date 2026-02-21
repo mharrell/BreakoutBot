@@ -1,35 +1,107 @@
+# BreakoutBot 🎮
 
-# Breakout RL Agent
+A reinforcement learning agent trained to play Atari Breakout using PPO (Proximal Policy Optimization) via Stable-Baselines3.
 
-A deep reinforcement learning agent trained to play Atari Breakout using PPO.
+## Current Best Performance
+- **Peak Eval Score: 85.4** (at 19.2M timesteps)
+- **Best Individual Game: 43**
+- **Total Steps Trained: 25M**
 
-## Technologies
-- Python
-- Stable-Baselines3
-- Gymnasium
-- PyTorch
-- CUDA
+## Results
 
-## How to Run
-1. Install dependencies: `pip install stable-baselines3[extra] gymnasium[atari] ale-py autorom`
-2. Accept ROM licenses: `autorom --accept-license`
-3. Train: `python train.py`
-4. Watch: `python watch.py`
+After 9 experimental runs and 25 million training steps, the agent has learned to actively chase the ball and develop strategies well beyond the random baseline of 0-2 points per game.
 
-## Reference Guide and Output Explaination
-[RL Training Reference Guide](RL_REFERENCE.md)
+### Training Progress (Best Run — PPO_13)
 
-## Experiments
-- Run 1: Default params, peaked at ~30, entropy collapsed around 2.5M steps
-- Run 2: ent_coef=0.01, clip_range=0.1, peaked at 26.5, unstable exploration
-- Run 3: ent_coef=0.003, clip_range=0.2 peaked at 30.1 then dipped
-- Run 4: (PPO_8) Added policy_kwargs: net_arch=[512, 512]
-- Rationale: Runs 1-3 all plateaued and declined around 2 million timesteps 
-  regardless of exploration tuning, suggesting the default [64, 64] network 
-  lacked capacity to learn more complex strategies. Kept ent_coef=0.003, clip_range=0.2 from run 3
-- Run 5: (PPO_9) run 4 stalled out around 25 after 2.5 million timesteps. Decreased learning rate to 1.25e-4
-- Run 6: entropy loss dropped quickly in run 5. changed ent_coef=0.006
-- Run 7: Increasing the network didn't seem to help. Lowered it back to 64,64 but increased the number of envs and batch size.
-- Run 8: training died fast. reset learning rate to 2.5e-4. 
-- Run 9: We appear to be getting somewhere. increased total timesteps to 15 million.
+| Timestep | Eval Reward |
+|----------|-------------|
+| 1.6M | 32.2 |
+| 4.8M | 39.0 |
+| 6.4M | 47.4 |
+| 19.2M | **85.4** 🏆 |
 
+## Setup
+
+```bash
+# Clone the repo
+git clone https://github.com/mharrell/BreakoutBot
+cd BreakoutBot
+
+# Install dependencies
+pip install stable-baselines3[extra] gymnasium[atari] ale-py autorom torch
+
+# Accept ROM license
+AutoROM --accept-license
+```
+
+## Usage
+
+### Train
+```bash
+python train.py
+```
+
+### Watch the agent play
+```bash
+python watch.py
+```
+
+### Check evaluation history
+```bash
+python get_eval_logs.py
+```
+
+### Monitor training in TensorBoard
+```bash
+tensorboard --logdir ./tensorboard/
+```
+
+## Best Hyperparameters (PPO_13)
+
+```python
+PPO(
+    "CnnPolicy",
+    n_envs=32,
+    n_steps=128,
+    batch_size=1024,
+    n_epochs=4,
+    gamma=0.99,
+    learning_rate=2.5e-4,
+    ent_coef=0.006,
+    vf_coef=0.5,
+    clip_range=0.2,
+    net_arch=[64, 64]
+)
+```
+
+## Experiment History
+
+| Run | Key Change | Peak Eval | Outcome |
+|-----|-----------|-----------|---------|
+| PPO_5 | Baseline defaults | ~30 | Entropy collapsed at 2M steps |
+| PPO_6 | ent_coef=0.01 | ~26 | Too aggressive, unstable |
+| PPO_7 | ent_coef=0.003 | ~31 | Best small-net run |
+| PPO_8 | net=[512,512] | ~22 | Large network underperformed |
+| PPO_9 | lr=1.25e-4 | ~21 | Still entropy collapsed |
+| PPO_10 | ent_coef=0.006 | ~25 | Better but network limiting |
+| PPO_11 | Back to [64,64] | ~20 | lr too low for small network |
+| PPO_12 | n_envs=32 | ~6 | batch_size too small for 32 envs |
+| PPO_13 | batch=1024, lr=2.5e-4 | **85.4** | Best run ✅ |
+
+## Key Lessons Learned
+
+- Larger networks are not always better — [64,64] outperformed [512,512] for Breakout
+- Learning rate must match network size — small networks need higher learning rates
+- When increasing n_envs, scale batch_size proportionally
+- Entropy coefficient of 0.006 maintained healthy exploration through 25M steps
+- approx_kl spikes are recoverable — the run stabilized after each spike
+
+## Reference
+
+See [RL_REFERENCE.md](RL_REFERENCE.md) for a full guide to PPO hyperparameters, training metrics, and the decision framework used throughout this project.
+
+## What's Next
+
+- Continue training toward consistent 85+ eval scores
+- Experiment with reward shaping
+- Apply curriculum learning approach to StarCraft II economic agent

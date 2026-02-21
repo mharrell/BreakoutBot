@@ -1,7 +1,7 @@
 # PPO Training Reference Guide
 ### Breakout RL Agent — Levers, Outputs & Experiment History
 
-**Current Best: 36.6 rollout / 33.4 eval | Best Individual Game: 43**
+**Current Best: 85.4 eval | Best Individual Game: 43 | Total Steps Trained: 25M**
 
 ---
 
@@ -57,8 +57,8 @@ These are the parameters you control in `train.py`. Each one affects a different
 
 All runs used ALE/Breakout-v5 with VecFrameStack (n_stack=4). Parameters not listed were kept at defaults.
 
-| Run | TensorBoard | Key Parameters | Peak Reward | Notes |
-|-----|-------------|----------------|-------------|-------|
+| Run | TensorBoard | Key Parameters | Peak Eval | Notes |
+|-----|-------------|----------------|-----------|-------|
 | 1 | PPO_5 | Default: ent_coef=0.0, lr=2.5e-4, net=[64,64], n_envs=8 | ~30 | Entropy collapsed ~2M steps |
 | 2 | PPO_6 | ent_coef=0.01, clip_range=0.1 | ~26 | Too much entropy, unstable, tanked at 2M |
 | 3 | PPO_7 | ent_coef=0.003, clip_range=0.2 | ~31 | Best small-network run, declined after 2M |
@@ -67,16 +67,37 @@ All runs used ALE/Breakout-v5 with VecFrameStack (n_stack=4). Parameters not lis
 | 6 | PPO_10 | net=[512,512], lr=1.25e-4, ent_coef=0.006 | ~25 | Better entropy but network still limiting |
 | 7 | PPO_11 | Back to net=[64,64], ent_coef=0.006, lr=1.25e-4 | ~20 | lr too low for small network, entropy collapsed |
 | 8 | PPO_12 | net=[64,64], n_envs=32, batch=1024, lr=1.25e-4 | ~6 | 32 envs + low lr = extreme entropy collapse |
-| 9 | PPO_13 | net=[64,64], n_envs=32, batch=1024, lr=2.5e-4, ent_coef=0.006 | 36.6+ | Best run. Stable entropy, still training at 25M steps |
+| 9 | PPO_13 | net=[64,64], n_envs=32, batch=1024, lr=2.5e-4, ent_coef=0.006 | **85.4** | Best run. Trained to 25M steps. Peaked at 19.2M |
+
+### Eval Score History — PPO_13 (Best Run)
+
+| Timestep | Eval Reward | Notes |
+|----------|-------------|-------|
+| 1,600,000 | 32.2 | Strong start |
+| 3,200,000 | 33.4 | Steady climb |
+| 4,800,000 | 39.0 | Breaking through |
+| 6,400,000 | **47.4** | Previous best checkpoint |
+| 8,000,000 | 32.0 | KL spike dip |
+| 9,600,000 | 35.8 | Recovering |
+| 11,200,000 | 37.6 | Climbing again |
+| 12,800,000 | 37.0 | Stable |
+| 14,400,000 | 33.8 | Minor dip |
+| 16,000,000 | 27.6 | Trough |
+| 17,600,000 | 42.6 | Recovery |
+| 19,200,000 | **85.4** | 🏆 All-time best |
+| 20,800,000 | 38.6 | Spike didn't hold |
+| 22,400,000 | 41.2 | Stabilizing |
+| 24,000,000 | 31.2 | Run ended |
 
 ### Key Lessons Learned
 
-1. **Larger networks are not always better** — net=[512,512] consistently underperformed net=[64,64] for Breakout with these hyperparameters.
+1. **Larger networks are not always better** — net=[512,512] consistently underperformed net=[64,64] for Breakout.
 2. **Learning rate must match network size** — large networks need lower learning rates, small networks need higher ones.
 3. **More parallel environments requires proportionally larger batch size** — n_envs=32 with batch_size=256 caused extreme entropy collapse.
-4. **Winning combination so far**: ent_coef=0.006, n_envs=32, batch_size=1024, lr=2.5e-4, net=[64,64].
+4. **Winning combination**: ent_coef=0.006, n_envs=32, batch_size=1024, lr=2.5e-4, net=[64,64].
 5. **approx_kl spikes are normal** with this config — the run has been resilient and recovers each time.
 6. **Extending total_timesteps by restarting from checkpoint is effective** — the model continues improving past the original target.
+7. **85.4 spike at 19.2M steps** suggests the agent CAN play at that level but hasn't found consistency yet. Next run should focus on maintaining that performance.
 
 ---
 
