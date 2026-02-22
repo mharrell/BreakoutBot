@@ -2,22 +2,20 @@ import ale_py
 import gymnasium as gym
 import os
 from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import make_atari_env
-from stable_baselines3.common.vec_env import VecFrameStack
+from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.logger import configure
+from breakout_ram_env import BreakoutRamEnv
 
 gym.register_envs(ale_py)
 
-# Change this when starting a new training regime
-RUN_NAME = "PPO_13"
+RUN_NAME = "PPO_15"
 
-# 32 parallel environments to collect experience faster
-env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=42)
-env = VecFrameStack(env, n_stack=4)
+def make_env():
+    return BreakoutRamEnv()
 
-eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=123)
-eval_env = VecFrameStack(eval_env, n_stack=4)
+env = DummyVecEnv([make_env] * 32)
+eval_env = DummyVecEnv([make_env])
 
 eval_callback = EvalCallback(
     eval_env,
@@ -26,13 +24,13 @@ eval_callback = EvalCallback(
     eval_freq=50_000,
     deterministic=True,
     render=False,
-    verbose=1,          # added this
-
+    verbose=1,
 )
 
 model = PPO(
-    "CnnPolicy",
+    "MlpPolicy",
     env,
+    device='cpu',
     verbose=1,
     tensorboard_log=f"./tensorboard/{RUN_NAME}",
     n_steps=128,
@@ -43,26 +41,14 @@ model = PPO(
     ent_coef=0.006,
     vf_coef=0.5,
     clip_range=0.2,
-    policy_kwargs = dict(net_arch=[64, 64])
 )
 
-# Resume from checkpoint if it exists
-checkpoint_path = "models/best_model.zip"
-if os.path.exists(checkpoint_path):
-    print("Loading existing model...")
-    model = PPO.load(checkpoint_path, env=env,
-                     custom_objects={"ent_coef": 0.006,
-                                     "vf_coef": 0.5,
-                                     "clip_range": 0.2,
-                                     "policy_kwargs": dict(net_arch=[64, 64])})
-    model.set_logger(configure(f"./tensorboard/{RUN_NAME}", ["tensorboard", "stdout"]))
-else:
-    print("Starting fresh...")
+print("Starting fresh with RAM observations and reward shaping...")
 
 model.learn(
-    total_timesteps=25_000_000,
+    total_timesteps=10_000_000,
     callback=eval_callback
 )
 
-model.save("breakout_ppo_final")
+model.save("breakout_ppo_ram_final")
 env.close()

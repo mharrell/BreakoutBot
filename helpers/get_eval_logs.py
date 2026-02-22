@@ -1,6 +1,6 @@
 import numpy as np
 
-log_path = "./logs/evaluations.npz"
+log_path = "../logs/evaluations.npz"
 data = np.load(log_path)
 
 timesteps = data["timesteps"]
