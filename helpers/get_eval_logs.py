@@ -1,6 +1,8 @@
 import numpy as np
 
-log_path = "../logs/evaluations.npz"
+RUN_NAME = "PPO_15"  # Change this to check a different run
+
+log_path = f"./logs/{RUN_NAME}/evaluations.npz"
 data = np.load(log_path)
 
 timesteps = data["timesteps"]
