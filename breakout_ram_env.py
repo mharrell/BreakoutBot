@@ -33,7 +33,8 @@ class BreakoutRamEnv(gym.Wrapper):
 
         # Ball tracking reward — only when ball is in lower half
         if ball_y > 128:
-            tracking_reward = 1.0 - abs(int(paddle_x) - int(ball_x)) / SCREEN_WIDTH
+            raw = 1.0 - abs(int(paddle_x) - int(ball_x)) / SCREEN_WIDTH
+            tracking_reward = max(0.0, min(1.0, raw))
         else:
             tracking_reward = 0.0
 
