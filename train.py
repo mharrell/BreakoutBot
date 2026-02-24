@@ -6,17 +6,20 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import EvalCallback
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.monitor import Monitor
-from breakout_ram_env import BreakoutRamEnv
+from breakout_ram_env import BreakoutRamEnv, BreakoutRamEvalEnv
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_15"
+RUN_NAME = "PPO_18"
 
 def make_env():
     return Monitor(BreakoutRamEnv())
 
+def make_eval_env():
+    return Monitor(BreakoutRamEvalEnv())
+
 env = DummyVecEnv([make_env] * 32)
-eval_env = DummyVecEnv([make_env])
+eval_env = DummyVecEnv([make_eval_env])
 
 eval_callback = EvalCallback(
     eval_env,

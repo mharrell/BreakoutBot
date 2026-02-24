@@ -1,10 +1,10 @@
 import numpy as np
 import os
 
-RUN_NAME = "PPO_15"
+RUN_NAME = "PPO_18"
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-log_path = os.path.join(project_root, "logs", "evaluations.npz")
+log_path = os.path.join(project_root, "logs", RUN_NAME, "evaluations.npz")
 
 print("Looking for:", log_path)
 print("Logs folder contents:", os.listdir(os.path.join(project_root, "logs")) if os.path.exists(os.path.join(project_root, "logs")) else "logs folder missing")
