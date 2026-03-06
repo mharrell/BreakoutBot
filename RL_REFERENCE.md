@@ -1,7 +1,7 @@
 # PPO Training Reference Guide
 ### Breakout RL Agent — Levers, Outputs & Experiment History
 
-**Current Best: 85.4 eval (pixel-based) | Best Individual Game: 43 | Total Steps Trained: 35M+**
+**Current Best: 85.4 eval (pixel-based) | Best Individual Game: 43 | Total Steps Trained: 150M+**
 
 ---
 
@@ -12,8 +12,8 @@ These are the parameters you control in `train.py`. Each one affects a different
 | Parameter | What It Does | Effect on Training |
 |-----------|-------------|-------------------|
 | `ent_coef` | Entropy coefficient — adds bonus reward for taking varied actions | Higher = more exploration, prevents early convergence. Too high = unstable training |
-| `learning_rate` | How big each update step is | Lower = more stable but slower. Larger networks need lower rates. Too low = entropy collapse |
-| `clip_range` | Limits how much the policy can change in one update | Lower = more conservative updates. Watch approx_kl for signs it's too high |
+| `learning_rate` | How big each update step is | Lower = more stable but slower. Larger networks need lower rates. Too low = entropy collapse. Pass a callable for linear decay: `lambda p: end + (start - end) * p` |
+| `clip_range` | Limits how much the policy can change in one update | Lower = more conservative updates. Watch approx_kl for signs it's too high. Can also be decayed linearly alongside learning_rate |
 | `n_steps` | How many steps to collect before each update | Higher = more data per update, smoother gradients but slower iteration |
 | `batch_size` | How much data to use per gradient update | Scale up proportionally when increasing n_envs |
 | `n_epochs` | How many times to reuse collected data per update | Higher = more efficient data use but risk of overfitting |
@@ -118,9 +118,15 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | 6 | PPO_10 | Pixel | net=[512,512], lr=1.25e-4, ent_coef=0.006 | ~25 | Better entropy, network limiting |
 | 7 | PPO_11 | Pixel | net=[64,64], ent_coef=0.006, lr=1.25e-4 | ~20 | lr too low for small network |
 | 8 | PPO_12 | Pixel | n_envs=32, batch=1024, lr=1.25e-4 | ~6 | 32 envs + low lr = collapse |
-| 9 | PPO_13 | Pixel | n_envs=32, batch=1024, lr=2.5e-4, ent_coef=0.006 | **85.4** | Best pixel run. 25M steps |
+| 9 | PPO_13 | Pixel | n_envs=32, batch=1024, lr=2.5e-4, ent_coef=0.006 | **85.4** | Best run. Peaked 19.2M then collapsed |
 | 10 | PPO_14 | Pixel | Same as PPO_13, lr=1.25e-4 | ~59 | Lower lr, still oscillating |
-| 11 | PPO_15 | RAM | RAM obs, reward shaping, MlpPolicy, CPU | In progress | First RAM run |
+| 11 | PPO_15 | RAM | RAM obs, ball tracking reward, MlpPolicy, CPU | 56.8 | Good peak at 4.8M, then degraded |
+| 12 | PPO_16 | RAM | RAM obs, reward shaping | 56.4 | Short run, ended near peak |
+| 13 | PPO_17 | RAM | RAM obs | 0.0 | Completely broken (unknown cause) |
+| 14 | PPO_18 | RAM | RAM obs, paddle hit reward | 19.0 | Collapsed badly |
+| 15 | PPO_19 | RAM | RAM obs | 36.0 | Full run, mediocre. RAM approach abandoned |
+| 16 | PPO_20 | Pixel | n_envs=64, batch=2048, lr=2.5e-4 (const) | 50.0 | Cut short |
+| 17 | PPO_21 | Pixel | n_envs=32, batch=1024, LR linear 2.5e-4→1e-5, 40M steps | In progress | Targeting catastrophic forgetting |
 
 ### PPO_13 Eval Score History (Best Pixel Run)
 
@@ -151,7 +157,9 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 5. **RAM observations are much faster** — 1400+ fps vs 300-600 fps for pixel runs.
 6. **RAM enables precise reward shaping** — exact ball and paddle positions available directly.
 7. **MlpPolicy runs better on CPU** — no benefit from GPU for non-CNN policies.
-8. **Reward shaping requires care** — tracking bonus scaled to 0.1 to avoid overwhelming brick reward.
+8. **Ball tracking reward shaping backfired** — agent learned to mirror the ball without actually scoring points.
+9. **Constant LR causes catastrophic forgetting** — PPO_13's 85.4 peak was immediately followed by collapse. The agent discovered tunnel drilling (ball behind bricks, scores 253 in one game) then the next update at full LR overwrote the policy.
+10. **Linear LR decay is the standard Atari fix** — decay learning_rate and clip_range from full value to near-zero over the full training duration. SB3 accepts a callable: `lambda progress_remaining: end + (start - end) * progress_remaining`.
 
 ---
 

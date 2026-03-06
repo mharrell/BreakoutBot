@@ -5,8 +5,8 @@ A reinforcement learning agent trained to play Atari Breakout using PPO (Proxima
 ## Current Best Performance
 - **Peak Eval Score: 85.4** (pixel-based, PPO_13 at 19.2M timesteps)
 - **Best Individual Game: 43**
-- **Total Steps Trained: 35M+**
-- **Current Run: PPO_15** — RAM-based observations with ball tracking reward shaping
+- **Total Steps Trained: 150M+**
+- **Current Run: PPO_21** — pixel-based with linear LR decay to prevent catastrophic forgetting
 
 ## Approach
 
@@ -110,9 +110,15 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | PPO_10 | Pixel | ent_coef=0.006 | ~25 | Better entropy, network limiting |
 | PPO_11 | Pixel | Back to [64,64] | ~20 | lr too low for small network |
 | PPO_12 | Pixel | n_envs=32 | ~6 | batch_size too small |
-| PPO_13 | Pixel | batch=1024, lr=2.5e-4 | **85.4** ✅ | Best pixel run |
+| PPO_13 | Pixel | batch=1024, lr=2.5e-4 | **85.4** ✅ | Best run — peaked at 19.2M then collapsed |
 | PPO_14 | Pixel | lr=1.25e-4 | ~59 | Lower lr, still oscillating |
-| PPO_15 | RAM | RAM obs + reward shaping | In progress | First RAM run |
+| PPO_15 | RAM | RAM obs + ball tracking reward | 56.8 | Good peak, then degraded |
+| PPO_16 | RAM | RAM obs + reward shaping | 56.4 | Short run, ended near peak |
+| PPO_17 | RAM | RAM obs | 0.0 | Completely broken (unknown cause) |
+| PPO_18 | RAM | RAM obs + paddle hit reward | 19.0 | Collapsed badly |
+| PPO_19 | RAM | RAM obs | 36.0 | Full run, mediocre |
+| PPO_20 | Pixel | n_envs=64, batch=2048 | 50.0 | Cut short |
+| PPO_21 | Pixel | Linear LR decay 2.5e-4→1e-5, 40M steps | In progress | Targeting catastrophic forgetting fix |
 
 ## Key Lessons Learned
 
@@ -121,7 +127,8 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 - Scale batch_size proportionally when increasing n_envs
 - RAM observations train ~4x faster than pixel observations for MlpPolicy
 - MlpPolicy runs better on CPU — pass `device='cpu'` explicitly
-- Reward shaping requires careful scaling to not overwhelm the original reward signal
+- Reward shaping for ball tracking caused the agent to mirror the ball without scoring
+- Constant LR causes catastrophic forgetting after peak — the PPO_13 85.4 peak was followed by immediate collapse
 - Log paths should be run-specific to avoid overwriting history
 
 ## Reference
