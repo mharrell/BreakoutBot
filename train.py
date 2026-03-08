@@ -1,3 +1,4 @@
+import os
 import ale_py
 import gymnasium as gym
 from stable_baselines3 import PPO
@@ -33,27 +34,41 @@ eval_callback = EvalCallback(
     verbose=1,
 )
 
-model = PPO(
-    "CnnPolicy",
-    env,
-    verbose=1,
-    tensorboard_log=f"./tensorboard/{RUN_NAME}",
-    n_steps=128,
-    batch_size=1024,
-    n_epochs=4,
-    gamma=0.99,
-    learning_rate=linear_schedule(2.5e-4, 1e-5),
-    ent_coef=0.006,
-    vf_coef=0.5,
-    clip_range=linear_schedule(0.2, 0.05),
-    policy_kwargs=dict(net_arch=[64, 64])
-)
+checkpoint = f"./models/{RUN_NAME}/best_model.zip"
+resuming = os.path.exists(checkpoint)
 
-print(f"Starting fresh {RUN_NAME}...")
+if resuming:
+    print(f"Resuming {RUN_NAME} from checkpoint...")
+    model = PPO.load(
+        checkpoint,
+        env=env,
+        verbose=1,
+        tensorboard_log=f"./tensorboard/{RUN_NAME}",
+        learning_rate=linear_schedule(2.5e-4, 1e-5),
+        clip_range=linear_schedule(0.2, 0.05),
+    )
+else:
+    print(f"Starting fresh {RUN_NAME}...")
+    model = PPO(
+        "CnnPolicy",
+        env,
+        verbose=1,
+        tensorboard_log=f"./tensorboard/{RUN_NAME}",
+        n_steps=128,
+        batch_size=1024,
+        n_epochs=4,
+        gamma=0.99,
+        learning_rate=linear_schedule(2.5e-4, 1e-5),
+        ent_coef=0.006,
+        vf_coef=0.5,
+        clip_range=linear_schedule(0.2, 0.05),
+        policy_kwargs=dict(net_arch=[64, 64])
+    )
 
 model.learn(
     total_timesteps=40_000_000,
-    callback=eval_callback
+    callback=eval_callback,
+    reset_num_timesteps=not resuming,
 )
 
 model.save(f"./models/{RUN_NAME}/final_model")
