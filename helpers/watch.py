@@ -1,35 +1,35 @@
 import ale_py
 import gymnasium as gym
-import os
 from stable_baselines3 import PPO
-from breakout_ram_env import BreakoutRamEnv
+from stable_baselines3.common.env_util import make_atari_env
+from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-model_path = os.path.join(project_root, "models", "best_model")
+RUN_NAME = "PPO_22"
+MODEL_PATH = f"../models/{RUN_NAME}/best_model"
 
-env = BreakoutRamEnv()
-env.env = gym.make("ALE/Breakout-v5", obs_type="ram", render_mode="human")
+env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=0, env_kwargs={"render_mode": "human"})
+env = VecFrameStack(env, n_stack=4)
 
-model = PPO.load(model_path, device='cpu')
+model = PPO.load(MODEL_PATH, env=env)
 
-obs, _ = env.reset()
+obs = env.reset()
 
-# Fire to launch first ball
-obs, _, _, _, _ = env.step(1)
+total_reward = 0
+episode = 1
 
-prev_ram_ball_y = 0
-
-for _ in range(10_000):
+while True:
     action, _ = model.predict(obs, deterministic=True)
-    obs, reward, terminated, truncated, info = env.step(action)
+    obs, reward, done, info = env.step(action)
+    total_reward += reward[0]
 
-    # If ball y is 0 the ball isn't in play — fire to launch
-    ball_y = int(obs[90] * 255)
-    if ball_y == 0:
-        obs, _, _, _, _ = env.step(1)
+    if info[0].get("lives", 1) == 0 and done[0]:
+        print(f"Game {episode} finished | Score: {total_reward:.0f}")
+        total_reward = 0
+        episode += 1
+        obs = env.reset()
+    elif done[0]:
+        obs = env.reset()
 
-    if terminated or truncated:
-        obs, _ = env.reset()
-        obs, _, _, _, _ = env.step(1)
+env.close()
