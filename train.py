@@ -4,10 +4,14 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_atari_env
 from stable_baselines3.common.vec_env import VecFrameStack
-from stable_baselines3.common.callbacks import EvalCallback
+from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
+from stable_baselines3.common.callbacks import CallbackList
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_22"
+RUN_NAME = "PPO_23"
+TOTAL_TIMESTEPS = 100_000_000
+CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
+RESUME_PATH = f"./models/{RUN_NAME}/checkpoint/latest_checkpoint.zip"
 
 def linear_schedule(start: float, end: float):
     def schedule(progress_remaining: float) -> float:
@@ -31,27 +35,48 @@ eval_callback = EvalCallback(
     verbose=1,
 )
 
-print(f"Starting fresh {RUN_NAME}...")
-model = PPO(
-    "CnnPolicy",
-    env,
+checkpoint_callback = CheckpointCallback(
+    save_freq=100_000,
+    save_path=CHECKPOINT_PATH,
+    name_prefix="latest_checkpoint",
+    save_replay_buffer=False,
     verbose=1,
-    tensorboard_log=f"./tensorboard/{RUN_NAME}",
-    n_steps=128,
-    batch_size=2048,
-    n_epochs=4,
-    gamma=0.99,
-    learning_rate=linear_schedule(2.5e-4, 1e-5),
-    ent_coef=0.006,
-    vf_coef=0.5,
-    clip_range=linear_schedule(0.2, 0.05),
-    policy_kwargs=dict(net_arch=[64, 64])
 )
 
+callbacks = CallbackList([eval_callback, checkpoint_callback])
+
+# Resume from checkpoint if one exists, otherwise start fresh
+if os.path.exists(RESUME_PATH):
+    print(f"Resuming {RUN_NAME} from checkpoint...")
+    model = PPO.load(
+        RESUME_PATH,
+        env=env,
+        device="cuda",
+    )
+    reset_num_timesteps = False
+else:
+    print(f"Starting fresh {RUN_NAME}...")
+    model = PPO(
+        "CnnPolicy",
+        env,
+        verbose=1,
+        tensorboard_log=f"./tensorboard/{RUN_NAME}",
+        n_steps=128,
+        batch_size=2048,
+        n_epochs=4,
+        gamma=0.99,
+        learning_rate=linear_schedule(2.5e-4, 1e-5),
+        ent_coef=0.006,
+        vf_coef=0.5,
+        clip_range=linear_schedule(0.2, 0.05),
+        policy_kwargs=dict(net_arch=[64, 64])
+    )
+    reset_num_timesteps = True
+
 model.learn(
-    total_timesteps=60_000_000,
-    callback=eval_callback,
-    reset_num_timesteps=True,
+    total_timesteps=TOTAL_TIMESTEPS,
+    callback=callbacks,
+    reset_num_timesteps=reset_num_timesteps,
 )
 
 model.save(f"./models/{RUN_NAME}/final_model")
