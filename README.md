@@ -3,23 +3,28 @@
 A reinforcement learning agent trained to play Atari Breakout using PPO (Proximal Policy Optimization) via Stable-Baselines3. Built as a first foray into RL — no pretrained models or copied hyperparameters, everything discovered through systematic experimentation.
 
 ## Current Best Performance
-- **Peak Eval Score: 85.4** (pixel-based, PPO_13 at 19.2M timesteps)
+- **Peak Eval Score: 87.2** (pixel-based, PPO_22 at 57.6M timesteps)
 - **Best Individual Game: 43**
-- **Total Steps Trained: 150M+**
-- **Current Run: PPO_21** — pixel-based with linear LR decay to prevent catastrophic forgetting
+- **Total Steps Trained: 210M+**
+- **Current Run: PPO_22 complete** — pixel-based with linear LR and clip_range decay. New all-time best.
 
 ## Approach
 
 This project went through two distinct phases:
 
 ### Phase 1: Pixel-Based Training (PPO_5 through PPO_14)
-The agent learned directly from stacked game frames using a CNN policy. After 9 runs and 35M+ steps, the best eval score was **85.4** with the following configuration:
+The agent learned directly from stacked game frames using a CNN policy. After 9 runs and 35M+ steps, a previous best eval score of **85.4** was achieved with the following configuration:
 - `n_envs=32`, `batch_size=1024`, `lr=2.5e-4`, `ent_coef=0.006`, `net_arch=[64,64]`
 
-### Phase 2: RAM-Based Training with Reward Shaping (PPO_15+)
-Switched to reading the Atari RAM directly, which gives access to exact game state values. This enables:
-- **Faster training** — 1400+ fps vs 300-600 fps for pixel runs
-- **Reward shaping** — bonus reward for keeping paddle aligned with ball
+### Phase 2: RAM-Based Training with Reward Shaping (PPO_15–PPO_19)
+Switched to reading the Atari RAM directly, which gives access to exact game state values. This enabled faster training (1400+ fps) and precise reward shaping, but the approach was ultimately abandoned after underperforming pixel runs.
+
+### Phase 3: Back to Pixels with Linear Decay (PPO_20+)
+Returned to pixel-based training with two key improvements:
+- **n_envs=64** and **batch_size=2048** for faster experience collection
+- **Linear decay** for both `learning_rate` (2.5e-4 → 1e-5) and `clip_range` (0.2 → 0.05) to prevent catastrophic forgetting after peak performance
+
+This produced the new all-time best of **87.2** at 57.6M steps.
 
 ## Setup
 
@@ -110,15 +115,16 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | PPO_10 | Pixel | ent_coef=0.006 | ~25 | Better entropy, network limiting |
 | PPO_11 | Pixel | Back to [64,64] | ~20 | lr too low for small network |
 | PPO_12 | Pixel | n_envs=32 | ~6 | batch_size too small |
-| PPO_13 | Pixel | batch=1024, lr=2.5e-4 | **85.4** ✅ | Best run — peaked at 19.2M then collapsed |
+| PPO_13 | Pixel | batch=1024, lr=2.5e-4 | 85.4 | Previous best — peaked at 19.2M then collapsed |
 | PPO_14 | Pixel | lr=1.25e-4 | ~59 | Lower lr, still oscillating |
 | PPO_15 | RAM | RAM obs + ball tracking reward | 56.8 | Good peak, then degraded |
 | PPO_16 | RAM | RAM obs + reward shaping | 56.4 | Short run, ended near peak |
 | PPO_17 | RAM | RAM obs | 0.0 | Completely broken (unknown cause) |
 | PPO_18 | RAM | RAM obs + paddle hit reward | 19.0 | Collapsed badly |
-| PPO_19 | RAM | RAM obs | 36.0 | Full run, mediocre |
+| PPO_19 | RAM | RAM obs | 36.0 | Full run, mediocre. RAM abandoned |
 | PPO_20 | Pixel | n_envs=64, batch=2048 | 50.0 | Cut short |
-| PPO_21 | Pixel | Linear LR decay 2.5e-4→1e-5, 40M steps | In progress | Targeting catastrophic forgetting fix |
+| PPO_21 | Pixel | Linear LR decay 2.5e-4→1e-5, n_envs=32 | ~47 | LR decay confirmed to help |
+| PPO_22 | Pixel | Linear LR + clip_range decay, n_envs=64, batch=2048, 60M steps | **87.2** ✅ | New all-time best at 57.6M steps |
 
 ## Key Lessons Learned
 
@@ -128,8 +134,10 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 - RAM observations train ~4x faster than pixel observations for MlpPolicy
 - MlpPolicy runs better on CPU — pass `device='cpu'` explicitly
 - Reward shaping for ball tracking caused the agent to mirror the ball without scoring
-- Constant LR causes catastrophic forgetting after peak — the PPO_13 85.4 peak was followed by immediate collapse
-- Log paths should be run-specific to avoid overwriting history
+- Constant LR causes catastrophic forgetting after peak — fix with linear decay
+- Decaying both learning_rate AND clip_range together produces more stable late-training behavior
+- Strong late-run improvement in PPO_22 (65→87 in last 6M steps) suggests 60M+ steps could push higher
+- Bug found in linear_schedule: `progress_remaininga` typo — fix before PPO_23
 
 ## Reference
 
