@@ -1,22 +1,27 @@
 import os
+import glob
 import ale_py
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_atari_env
 from stable_baselines3.common.vec_env import VecFrameStack
-from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback
-from stable_baselines3.common.callbacks import CallbackList
+from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 gym.register_envs(ale_py)
 
 RUN_NAME = "PPO_23"
 TOTAL_TIMESTEPS = 100_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
-RESUME_PATH = f"./models/{RUN_NAME}/checkpoint/latest_checkpoint.zip"
 
 def linear_schedule(start: float, end: float):
     def schedule(progress_remaining: float) -> float:
         return end + (start - end) * progress_remaining
     return schedule
+
+def get_latest_checkpoint(path):
+    checkpoints = glob.glob(os.path.join(path, "latest_checkpoint_*_steps.zip"))
+    if not checkpoints:
+        return None
+    return max(checkpoints, key=os.path.getmtime)
 
 env = make_atari_env("ALE/Breakout-v5", n_envs=64, seed=42)
 env = VecFrameStack(env, n_stack=4)
@@ -45,14 +50,11 @@ checkpoint_callback = CheckpointCallback(
 
 callbacks = CallbackList([eval_callback, checkpoint_callback])
 
-# Resume from checkpoint if one exists, otherwise start fresh
-if os.path.exists(RESUME_PATH):
-    print(f"Resuming {RUN_NAME} from checkpoint...")
-    model = PPO.load(
-        RESUME_PATH,
-        env=env,
-        device="cuda",
-    )
+resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
+
+if resume_path:
+    print(f"Resuming {RUN_NAME} from {resume_path}...")
+    model = PPO.load(resume_path, env=env, device="cuda")
     reset_num_timesteps = False
 else:
     print(f"Starting fresh {RUN_NAME}...")
