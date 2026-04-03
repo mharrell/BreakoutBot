@@ -1,7 +1,7 @@
 # PPO Training Reference Guide
 ### Breakout RL Agent — Levers, Outputs & Experiment History
 
-**Current Best: 87.2 eval (pixel-based, PPO_22) | Best Individual Game: 43 | Total Steps Trained: 210M+**
+**Current Best: 119.80 eval (pixel-based, PPO_23) | Best Individual Game: 43 | Total Steps Trained: 244M+**
 
 ---
 
@@ -21,24 +21,24 @@ These are the parameters you control in `train.py`. Each one affects a different
 | `net_arch` | Size of fully connected layers (pixel runs only) | Larger = more capacity but needs lower learning rate and more careful tuning |
 | `vf_coef` | How much to weight value function loss vs policy loss | Higher = more focus on accurate reward prediction |
 | `n_envs` | Number of parallel game environments | More = faster experience collection. Scale batch_size proportionally |
-| `total_timesteps` | Total training duration | More = more time to learn. PPO_22 showed strong improvement in final 6M steps |
+| `total_timesteps` | Total training duration | More = more time to learn. PPO_23 showed major gains didn't arrive until 170M+ steps |
 | `device` | CPU vs GPU | MlpPolicy (RAM runs) runs faster on CPU. CnnPolicy (pixel runs) benefits from GPU |
 
-### Linear Schedule Pattern (Confirmed Working in PPO_22)
+### Linear Schedule Pattern (Confirmed Working in PPO_22 and PPO_23)
 
 Decay both `learning_rate` and `clip_range` from full value to near-zero over the full run:
 
 ```python
 def linear_schedule(start: float, end: float):
     def schedule(progress_remaining: float) -> float:
-        return end + (start - end) * progress_remaining  # NOTE: no typo here
+        return end + (start - end) * progress_remaining
     return schedule
 
 learning_rate=linear_schedule(2.5e-4, 1e-5),
 clip_range=linear_schedule(0.2, 0.05),
 ```
 
-⚠️ **Known bug in PPO_22 train.py**: `progress_remaininga` typo in the schedule function. Fix before PPO_23.
+When resuming from a checkpoint, use `reset_num_timesteps=False` so the schedule continues from where it left off rather than resetting to the start values.
 
 ---
 
@@ -46,11 +46,11 @@ clip_range=linear_schedule(0.2, 0.05),
 
 This project has used two fundamentally different observation approaches:
 
-### Pixel-Based (PPO_5–14, PPO_20–22) ✅ Current approach
+### Pixel-Based (PPO_5–14, PPO_20–23) ✅ Current approach
 - Agent sees stacked frames of the game screen as images
 - Uses `CnnPolicy` — convolutional neural network processes visual input
 - Uses `make_atari_env` with `VecFrameStack(n_stack=4)`
-- Slower training (~300-600 fps with 64 envs)
+- Training speed: ~300-320 fps with 64 envs
 - More generalizable. Best results in this project.
 
 ### RAM-Based (PPO_15–19) — Abandoned
@@ -103,13 +103,13 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | `ep_rew_mean` | Average score per episode during training (noisy) | Should climb over time. Dips normal during exploration phases |
 | `ep_len_mean` | Average game length in frames | Longer = agent keeping ball alive longer. Sudden drops signal a problem |
 | `eval/mean_reward` | Average score during deterministic evaluation — most reliable metric | Your ground truth. Should trend upward. Plateau or decline = time to intervene |
-| `fps` | Frames processed per second across all environments | RAM runs: 1000-2500+. Pixel runs: 300-600. Drops suggest throttling |
+| `fps` | Frames processed per second across all environments | RAM runs: 1000-2500+. Pixel runs: 300-320 with 64 envs. Drops suggest throttling |
 | `entropy_loss` | How much the agent is exploring vs exploiting | Early: -1.0 to -1.5. Mid: -0.3 to -0.5. Late: -0.1 to -0.3. Near 0 = collapsed |
-| `explained_variance` | How accurately the agent predicts future rewards | Closer to 1.0 is better. Below 0.5 = value function is struggling |
-| `approx_kl` | How much the policy changed this update | Should stay below 0.05. Spikes above 0.1 = watch closely. Above 0.15 = concern |
-| `clip_fraction` | How often PPO's safety clamp triggered | 0.05-0.15 is healthy. Very low at end of PPO_22 (0.015) = policy fully stabilized |
+| `explained_variance` | How accurately the agent predicts future rewards | Closer to 1.0 is better. Below 0.5 = value function is struggling. May drop when agent reaches new high-score territory |
+| `approx_kl` | How much the policy changed this update | Should stay below 0.05. Spikes above 0.1 = watch closely. Above 0.15 = concern. Near 0 at end of run = policy frozen |
+| `clip_fraction` | How often PPO's safety clamp triggered | 0.05-0.15 is healthy. Very low at end of long runs = policy fully stabilized |
 | `loss` | Combined training loss | Should generally decrease over time. Spikes can indicate instability |
-| `value_loss` | How wrong the reward predictions were | Should decrease over time. Climbing = agent seeing unfamiliar situations |
+| `value_loss` | How wrong the reward predictions were | Should decrease over time. Climbing late in training = agent reaching score ranges it rarely saw before — not necessarily a crisis |
 | `policy_gradient_loss` | How much the policy is being pushed to change | Should be small and stable. Large values indicate aggressive updates |
 | `n_updates` | Total number of gradient updates performed | Useful for tracking how much training has happened. Confirms checkpoint loaded correctly |
 
@@ -145,9 +145,61 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | PPO_19 | RAM | RAM obs | 36.0 | Full run, mediocre. RAM approach abandoned |
 | PPO_20 | Pixel | n_envs=64, batch=2048, lr=2.5e-4 (const) | 50.0 | Cut short |
 | PPO_21 | Pixel | n_envs=32, batch=1024, linear LR 2.5e-4→1e-5, 40M steps | ~47 | LR decay confirmed helpful |
-| PPO_22 | Pixel | n_envs=64, batch=2048, linear LR 2.5e-4→1e-5, linear clip 0.2→0.05, 60M steps | **87.2** ✅ | New all-time best at 57.6M steps |
+| PPO_22 | Pixel | n_envs=64, batch=2048, linear LR 2.5e-4→1e-5, linear clip 0.2→0.05, 60M steps | 87.2 | Previous best at 57.6M steps |
+| PPO_23 | Pixel | Same as PPO_22, n_eval_episodes=20, checkpoint resuming, 244M steps total | **119.80** ✅ | New all-time best at 217.6M steps. Consistent 90-110+ eval floor in final stretch |
 
-### PPO_22 Eval Score History (Current Best Run)
+### PPO_23 Eval Score History (Current Best Run)
+
+| Timestep | Eval Reward |
+|----------|-------------|
+| 99,200,000 | 65.65 |
+| 102,400,000 | 82.65 |
+| 105,600,000 | 74.60 |
+| 108,800,000 | 65.35 |
+| 112,000,000 | 79.10 |
+| 115,200,000 | 50.60 |
+| 118,400,000 | 66.35 |
+| 121,600,000 | 69.25 |
+| 124,800,000 | 64.80 |
+| 128,000,000 | 73.20 |
+| 131,200,000 | 50.35 |
+| 134,400,000 | 82.85 |
+| 137,600,000 | 78.10 |
+| 140,800,000 | 63.95 |
+| 144,000,000 | 83.65 |
+| 147,200,000 | 76.40 |
+| 150,400,000 | 71.70 |
+| 153,600,000 | 63.15 |
+| 156,800,000 | 77.85 |
+| 160,000,000 | 82.20 |
+| 163,200,000 | 86.20 |
+| 166,400,000 | 78.70 |
+| 169,600,000 | 118.70 |
+| 172,800,000 | 61.75 |
+| 176,000,000 | 70.85 |
+| 179,200,000 | 79.25 |
+| 182,400,000 | 79.70 |
+| 185,600,000 | 117.20 |
+| 188,800,000 | 60.05 |
+| 192,000,000 | 82.20 |
+| 195,200,000 | 97.65 |
+| 198,400,000 | 90.55 |
+| 201,600,000 | 94.50 |
+| 204,800,000 | 102.95 |
+| 208,000,000 | 75.30 |
+| 211,200,000 | 97.55 |
+| 214,400,000 | 97.85 |
+| 217,600,000 | **119.80** 🏆 |
+| 220,800,000 | 83.90 |
+| 224,000,000 | 105.70 |
+| 227,200,000 | 108.40 |
+| 230,400,000 | 86.55 |
+| 233,600,000 | 100.45 |
+| 236,800,000 | 89.95 |
+| 240,000,000 | 116.45 |
+| 243,200,000 | 108.65 |
+
+### PPO_22 Eval Score History (Previous Best Run)
 
 | Timestep | Eval Reward |
 |----------|-------------|
@@ -168,9 +220,9 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | 48,000,000 | 62.3 |
 | 51,200,000 | 60.8 |
 | 54,400,000 | 65.4 |
-| 57,600,000 | **87.2** 🏆 |
+| 57,600,000 | **87.2** |
 
-### PPO_13 Eval Score History (Previous Best Run)
+### PPO_13 Eval Score History (First Major Breakthrough)
 
 | Timestep | Eval Reward |
 |----------|-------------|
@@ -196,12 +248,14 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 2. **Learning rate must match network size** — small networks need higher learning rates.
 3. **Scale batch_size with n_envs** — n_envs=32 with batch_size=256 caused extreme entropy collapse.
 4. **Best pixel config**: ent_coef=0.006, n_envs=64, batch_size=2048, linear LR 2.5e-4→1e-5, linear clip 0.2→0.05, net=[64,64].
-5. **RAM observations are much faster** — 1400+ fps vs 300-600 fps for pixel runs.
+5. **RAM observations are much faster** — 1400+ fps vs 300-320 fps for pixel runs.
 6. **RAM reward shaping backfired** — agent learned to mirror the ball without scoring points.
 7. **MlpPolicy runs better on CPU** — no benefit from GPU for non-CNN policies.
 8. **Constant LR causes catastrophic forgetting** — PPO_13's 85.4 peak was immediately followed by collapse.
-9. **Decay both LR and clip_range together** — PPO_22 confirmed this combination prevents late-run collapse.
-10. **More timesteps still help** — PPO_22 showed 65→87 improvement in its final 6M steps. PPO_23 should run longer.
+9. **Decay both LR and clip_range together** — confirmed across PPO_22 and PPO_23 to prevent late-run collapse.
+10. **More timesteps matter significantly** — PPO_23 didn't reach its ceiling until 170M+ steps. Don't stop early.
+11. **Checkpoint resuming works** — use `reset_num_timesteps=False` so LR decay tracks continuously across restarts.
+12. **Seed diversity matters for generalization** — agent trained on seed=42 struggles when ball launches in an unfamiliar direction. PPO_24 should randomize eval seeds or use `seed=None` to ensure the agent learns to handle both ball launch directions.
 
 ---
 
@@ -214,10 +268,12 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | Reward plateau, collapsed entropy | Premature convergence | Increase `ent_coef` or restart with new params |
 | Reward declining after peak | Instability or collapse | Check if both rollout AND eval are declining. If yes, stop and adjust |
 | `approx_kl` consistently above 0.1 | Updates too aggressive | Monitor closely. Above 0.15 = consider reducing learning rate |
+| `approx_kl` near 0.0 late in run | Policy frozen, LR exhausted | Fine to stop — best_model.zip already captured the peak |
 | fps suddenly drops | Hardware throttling | Close background apps, check GPU temp with `nvidia-smi` |
 | best_model.zip not updating | Eval hasn't beaten previous best | Check eval logs with `get_eval_logs.py` |
 | Both rollout and eval declining | Real regression | Stop training, diagnose before continuing |
 | Rollout dips but eval holds | Exploration phase | Normal, wait it out |
+| value_loss climbing late in run | Agent reaching new score territory | Not a crisis — value function catching up to new behavior |
 | Strong improvement in final steps | Model had more to give | Run longer next time |
 
 ---

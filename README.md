@@ -3,10 +3,10 @@
 A reinforcement learning agent trained to play Atari Breakout using PPO (Proximal Policy Optimization) via Stable-Baselines3. Built as a first foray into RL — no pretrained models or copied hyperparameters, everything discovered through systematic experimentation.
 
 ## Current Best Performance
-- **Peak Eval Score: 87.2** (pixel-based, PPO_22 at 57.6M timesteps)
+- **Peak Eval Score: 119.80** (pixel-based, PPO_23 at 217.6M timesteps)
 - **Best Individual Game: 43**
-- **Total Steps Trained: 210M+**
-- **Current Run: PPO_22 complete** — pixel-based with linear LR and clip_range decay. New all-time best.
+- **Total Steps Trained: 244M+**
+- **Current Run: PPO_23 complete** — pixel-based with linear LR and clip_range decay, 244M steps. New all-time best.
 
 ## Approach
 
@@ -24,7 +24,7 @@ Returned to pixel-based training with two key improvements:
 - **n_envs=64** and **batch_size=2048** for faster experience collection
 - **Linear decay** for both `learning_rate` (2.5e-4 → 1e-5) and `clip_range` (0.2 → 0.05) to prevent catastrophic forgetting after peak performance
 
-This produced the new all-time best of **87.2** at 57.6M steps.
+PPO_22 set a new record of **87.2** at 57.6M steps. PPO_23 extended training to 244M steps with automatic checkpoint resuming and pushed the record to **119.80**, with a consistent 90-110+ eval floor in the final third of training.
 
 ## Setup
 
@@ -124,7 +124,8 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | PPO_19 | RAM | RAM obs | 36.0 | Full run, mediocre. RAM abandoned |
 | PPO_20 | Pixel | n_envs=64, batch=2048 | 50.0 | Cut short |
 | PPO_21 | Pixel | Linear LR decay 2.5e-4→1e-5, n_envs=32 | ~47 | LR decay confirmed to help |
-| PPO_22 | Pixel | Linear LR + clip_range decay, n_envs=64, batch=2048, 60M steps | **87.2** ✅ | New all-time best at 57.6M steps |
+| PPO_22 | Pixel | Linear LR + clip_range decay, n_envs=64, batch=2048, 60M steps | 87.2 | Previous best at 57.6M steps |
+| PPO_23 | Pixel | Same as PPO_22, n_eval_episodes=20, checkpoint resuming, 244M steps total | **119.80** ✅ | New all-time best at 217.6M steps. Consistent 90-110+ floor in final stretch |
 
 ## Key Lessons Learned
 
@@ -136,8 +137,10 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 - Reward shaping for ball tracking caused the agent to mirror the ball without scoring
 - Constant LR causes catastrophic forgetting after peak — fix with linear decay
 - Decaying both learning_rate AND clip_range together produces more stable late-training behavior
-- Strong late-run improvement in PPO_22 (65→87 in last 6M steps) suggests 60M+ steps could push higher
-- Bug found in linear_schedule: `progress_remaininga` typo — fix before PPO_23
+- More timesteps matter significantly — PPO_23 didn't hit its ceiling until 170M+ steps
+- Checkpoint resuming with `reset_num_timesteps=False` lets LR decay track correctly across restarts
+- Fixed `progress_remaininga` typo in linear_schedule before PPO_23 — always verify schedule function
+- Eval seed consistency matters — agent trained on seed=42 plays best on similar seed distributions. PPO_24 should address seed diversity so agent handles both ball launch directions
 
 ## Reference
 

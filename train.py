@@ -9,7 +9,7 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 gym.register_envs(ale_py)
 
 RUN_NAME = "PPO_23"
-TOTAL_TIMESTEPS = 100_000_000
+TOTAL_TIMESTEPS = 150_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 def linear_schedule(start: float, end: float):
@@ -34,7 +34,7 @@ eval_callback = EvalCallback(
     best_model_save_path=f"./models/{RUN_NAME}",
     log_path=f"./logs/{RUN_NAME}",
     eval_freq=50_000,
-    n_eval_episodes=10,
+    n_eval_episodes=20,
     deterministic=True,
     render=False,
     verbose=1,
