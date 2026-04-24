@@ -8,8 +8,8 @@ from stable_baselines3.common.vec_env import VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_23"
-TOTAL_TIMESTEPS = 150_000_000
+RUN_NAME = "PPO_24"
+TOTAL_TIMESTEPS = 300_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 def linear_schedule(start: float, end: float):
@@ -23,10 +23,10 @@ def get_latest_checkpoint(path):
         return None
     return max(checkpoints, key=os.path.getmtime)
 
-env = make_atari_env("ALE/Breakout-v5", n_envs=64, seed=42)
+env = make_atari_env("ALE/Breakout-v5", n_envs=64, seed=None)
 env = VecFrameStack(env, n_stack=4)
 
-eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=123)
+eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None)
 eval_env = VecFrameStack(eval_env, n_stack=4)
 
 eval_callback = EvalCallback(
@@ -34,7 +34,7 @@ eval_callback = EvalCallback(
     best_model_save_path=f"./models/{RUN_NAME}",
     log_path=f"./logs/{RUN_NAME}",
     eval_freq=50_000,
-    n_eval_episodes=20,
+    n_eval_episodes=50,
     deterministic=True,
     render=False,
     verbose=1,

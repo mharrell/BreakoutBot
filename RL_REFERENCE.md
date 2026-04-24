@@ -1,7 +1,7 @@
 # PPO Training Reference Guide
 ### Breakout RL Agent — Levers, Outputs & Experiment History
 
-**Current Best: 119.80 eval (pixel-based, PPO_23) | Best Individual Game: 43 | Total Steps Trained: 244M+**
+**Current Best: 124.00 eval (pixel-based, PPO_24) | Best Individual Game: 397 (real score) | Total Steps Trained: 550M+**
 
 ---
 
@@ -24,7 +24,7 @@ These are the parameters you control in `train.py`. Each one affects a different
 | `total_timesteps` | Total training duration | More = more time to learn. PPO_23 showed major gains didn't arrive until 170M+ steps |
 | `device` | CPU vs GPU | MlpPolicy (RAM runs) runs faster on CPU. CnnPolicy (pixel runs) benefits from GPU |
 
-### Linear Schedule Pattern (Confirmed Working in PPO_22 and PPO_23)
+### Linear Schedule Pattern (Confirmed Working in PPO_22, PPO_23, PPO_24)
 
 Decay both `learning_rate` and `clip_range` from full value to near-zero over the full run:
 
@@ -46,11 +46,11 @@ When resuming from a checkpoint, use `reset_num_timesteps=False` so the schedule
 
 This project has used two fundamentally different observation approaches:
 
-### Pixel-Based (PPO_5–14, PPO_20–23) ✅ Current approach
+### Pixel-Based (PPO_5–14, PPO_20–24) ✅ Current approach
 - Agent sees stacked frames of the game screen as images
 - Uses `CnnPolicy` — convolutional neural network processes visual input
 - Uses `make_atari_env` with `VecFrameStack(n_stack=4)`
-- Training speed: ~300-320 fps with 64 envs
+- Training speed: ~350-620 fps with 64 envs (varies with system state — see Hardware Notes)
 - More generalizable. Best results in this project.
 
 ### RAM-Based (PPO_15–19) — Abandoned
@@ -94,16 +94,19 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 
 **Result:** Backfired — agent learned to mirror the ball without actually scoring points.
 
+### Important Note on ClipRewardEnv
+`make_atari_env` automatically applies `ClipRewardEnv`, which clips all rewards to [-1, 1] during training. This means every brick hit returns exactly 1.0 regardless of actual point value. The agent learns entirely from clipped signals, yet still discovers high-value strategies like the tunnel exploit. Eval scores reported during training reflect clipped rewards — real in-game scores are much higher. A clipped eval score of ~124 corresponds to real game scores of 200-400+ when the tunnel strategy executes.
+
 ---
 
 ## Part 4: Training Outputs
 
 | Output | What It Means | Healthy Range / What to Watch |
 |--------|--------------|-------------------------------|
-| `ep_rew_mean` | Average score per episode during training (noisy) | Should climb over time. Dips normal during exploration phases |
-| `ep_len_mean` | Average game length in frames | Longer = agent keeping ball alive longer. Sudden drops signal a problem |
+| `ep_rew_mean` | Average score per episode during training (noisy, clipped rewards) | Should climb over time. Dips normal during exploration phases. 100+ rollout mean = exceptional |
+| `ep_len_mean` | Average game length in frames | Longer = agent keeping ball alive longer. Sudden drops signal a problem. 1400-1500 = healthy |
 | `eval/mean_reward` | Average score during deterministic evaluation — most reliable metric | Your ground truth. Should trend upward. Plateau or decline = time to intervene |
-| `fps` | Frames processed per second across all environments | RAM runs: 1000-2500+. Pixel runs: 300-320 with 64 envs. Drops suggest throttling |
+| `fps` | Frames processed per second across all environments | RAM runs: 1000-2500+. Pixel runs: 350-620 with 64 envs. Drops suggest throttling or sleep/wake cycle |
 | `entropy_loss` | How much the agent is exploring vs exploiting | Early: -1.0 to -1.5. Mid: -0.3 to -0.5. Late: -0.1 to -0.3. Near 0 = collapsed |
 | `explained_variance` | How accurately the agent predicts future rewards | Closer to 1.0 is better. Below 0.5 = value function is struggling. May drop when agent reaches new high-score territory |
 | `approx_kl` | How much the policy changed this update | Should stay below 0.05. Spikes above 0.1 = watch closely. Above 0.15 = concern. Near 0 at end of run = policy frozen |
@@ -124,7 +127,44 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 
 ---
 
-## Part 5: Experiment History
+## Part 5: Hardware Notes
+
+**Test System:** Intel i5-13600K (14 cores / 20 threads), 32GB RAM, NVIDIA GeForce RTX 3060 Ti (8GB VRAM)
+
+### Training Speed
+- Pixel runs with 64 envs: **350-620 fps** depending on system state
+- fps drops significantly after sleep/wake cycles — Windows deprioritizes the process. Restart the script to recover full speed
+- Running from PyCharm adds slight overhead vs running `python train.py` directly from PowerShell
+
+### GPU Utilization Pattern
+PPO with 64 Atari environments is **CPU-bound during rollout collection** and GPU-bound only during the update step. This creates a bursty pattern: GPU spikes to ~40-50% during updates, then drops near 0% while the CPU steps all 64 environments. Average GPU utilization appears low (~4-6%) but this is normal and expected — not a misconfiguration.
+
+To verify training is running correctly, use `nvidia-smi -l 1` and watch for periodic GPU spikes. If GPU never spikes above 10%, something is wrong.
+
+### Approximate Wall Clock Time (RTX 3060 Ti)
+| Steps | Approximate Time |
+|-------|-----------------|
+| 100M | 4-8 hours |
+| 300M | 13-24 hours |
+| 400M | 18-32 hours |
+
+Range reflects fps variance from system state (fresh start vs post-sleep-cycle).
+
+### Monitoring Commands
+```bash
+# Snapshot GPU status
+nvidia-smi
+
+# Watch GPU live (refreshes every second)
+nvidia-smi -l 1
+
+# Monitor training in TensorBoard
+tensorboard --logdir ./tensorboard/
+```
+
+---
+
+## Part 6: Experiment History
 
 | Run | Obs Type | Key Parameters | Peak Eval | Notes |
 |-----|----------|----------------|-----------|-------|
@@ -146,9 +186,59 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | PPO_20 | Pixel | n_envs=64, batch=2048, lr=2.5e-4 (const) | 50.0 | Cut short |
 | PPO_21 | Pixel | n_envs=32, batch=1024, linear LR 2.5e-4→1e-5, 40M steps | ~47 | LR decay confirmed helpful |
 | PPO_22 | Pixel | n_envs=64, batch=2048, linear LR 2.5e-4→1e-5, linear clip 0.2→0.05, 60M steps | 87.2 | Previous best at 57.6M steps |
-| PPO_23 | Pixel | Same as PPO_22, n_eval_episodes=20, checkpoint resuming, 244M steps total | **119.80** ✅ | New all-time best at 217.6M steps. Consistent 90-110+ eval floor in final stretch |
+| PPO_23 | Pixel | Same as PPO_22, n_eval_episodes=20, checkpoint resuming, 244M steps total | 119.80 | All-time best at 217.6M steps. Consistent 90-110+ eval floor in final stretch |
+| PPO_24 | Pixel | Same as PPO_23, seed=None, n_eval_episodes=50, ~300M steps | **124.00** ✅ | New all-time best at 265.6M steps. Confirmed tunnel exploit (397 real points observed). TensorBoard shows upward trend at run end — more steps warranted |
 
-### PPO_23 Eval Score History (Current Best Run)
+### PPO_24 Eval Score History (Current Best Run)
+
+*Note: Early eval logs (0–169M) lost to unexpected system restart. Data available from 169M onward.*
+
+| Timestep | Eval Reward |
+|----------|-------------|
+| 169,600,000 | 96.18 |
+| 172,800,000 | 86.30 |
+| 176,000,000 | 89.18 |
+| 179,200,000 | 80.32 |
+| 182,400,000 | 72.34 |
+| 185,600,000 | 72.96 |
+| 188,800,000 | 76.18 |
+| 192,000,000 | 95.22 |
+| 195,200,000 | 77.84 |
+| 198,400,000 | 70.48 |
+| 201,600,000 | 91.48 |
+| 204,800,000 | 77.68 |
+| 208,000,000 | 94.34 |
+| 211,200,000 | 104.88 |
+| 214,400,000 | 86.12 |
+| 217,600,000 | 90.56 |
+| 220,800,000 | 101.76 |
+| 224,000,000 | 81.48 |
+| 227,200,000 | 84.34 |
+| 230,400,000 | 88.04 |
+| 233,600,000 | 79.04 |
+| 236,800,000 | 96.14 |
+| 240,000,000 | 84.96 |
+| 243,200,000 | 86.26 |
+| 246,400,000 | 68.30 |
+| 249,600,000 | 83.98 |
+| 252,800,000 | 98.80 |
+| 256,000,000 | 93.20 |
+| 259,200,000 | 78.84 |
+| 262,400,000 | 89.64 |
+| 265,600,000 | **124.00** 🏆 |
+| 268,800,000 | 73.54 |
+| 272,000,000 | 117.76 |
+| 275,200,000 | 105.18 |
+| 278,400,000 | 83.22 |
+| 281,600,000 | 94.66 |
+| 284,800,000 | 91.62 |
+| 288,000,000 | 82.48 |
+| 291,200,000 | 83.42 |
+| 294,400,000 | 91.48 |
+| 297,600,000 | 101.12 |
+| 300,800,000 | 117.14 |
+
+### PPO_23 Eval Score History
 
 | Timestep | Eval Reward |
 |----------|-------------|
@@ -189,7 +279,7 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | 208,000,000 | 75.30 |
 | 211,200,000 | 97.55 |
 | 214,400,000 | 97.85 |
-| 217,600,000 | **119.80** 🏆 |
+| 217,600,000 | **119.80** |
 | 220,800,000 | 83.90 |
 | 224,000,000 | 105.70 |
 | 227,200,000 | 108.40 |
@@ -199,7 +289,7 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | 240,000,000 | 116.45 |
 | 243,200,000 | 108.65 |
 
-### PPO_22 Eval Score History (Previous Best Run)
+### PPO_22 Eval Score History
 
 | Timestep | Eval Reward |
 |----------|-------------|
@@ -242,20 +332,27 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | 22,400,000 | 41.2 |
 | 24,000,000 | 31.2 |
 
-### Key Lessons Learned
+---
+
+## Part 7: Key Lessons Learned
 
 1. **Larger networks are not always better** — net=[512,512] consistently underperformed net=[64,64].
 2. **Learning rate must match network size** — small networks need higher learning rates.
 3. **Scale batch_size with n_envs** — n_envs=32 with batch_size=256 caused extreme entropy collapse.
 4. **Best pixel config**: ent_coef=0.006, n_envs=64, batch_size=2048, linear LR 2.5e-4→1e-5, linear clip 0.2→0.05, net=[64,64].
-5. **RAM observations are much faster** — 1400+ fps vs 300-320 fps for pixel runs.
+5. **RAM observations are much faster** — 1400+ fps vs 350-620 fps for pixel runs.
 6. **RAM reward shaping backfired** — agent learned to mirror the ball without scoring points.
 7. **MlpPolicy runs better on CPU** — no benefit from GPU for non-CNN policies.
 8. **Constant LR causes catastrophic forgetting** — PPO_13's 85.4 peak was immediately followed by collapse.
-9. **Decay both LR and clip_range together** — confirmed across PPO_22 and PPO_23 to prevent late-run collapse.
-10. **More timesteps matter significantly** — PPO_23 didn't reach its ceiling until 170M+ steps. Don't stop early.
+9. **Decay both LR and clip_range together** — confirmed across PPO_22, PPO_23, and PPO_24 to prevent late-run collapse.
+10. **More timesteps matter significantly** — PPO_23 didn't reach its ceiling until 170M+ steps. PPO_24's TensorBoard showed an upward trend right at the 300M cutoff. Don't stop early.
 11. **Checkpoint resuming works** — use `reset_num_timesteps=False` so LR decay tracks continuously across restarts.
-12. **Seed diversity matters for generalization** — agent trained on seed=42 struggles when ball launches in an unfamiliar direction. PPO_24 should randomize eval seeds or use `seed=None` to ensure the agent learns to handle both ball launch directions.
+12. **Seed diversity improves generalization** — PPO_23 trained on seed=42 played best on similar seed distributions. PPO_24 used `seed=None` for both training and eval environments, confirmed to improve generalization across ball launch directions without hurting performance.
+13. **Eval scores understate real performance** — ClipRewardEnv clips training rewards to [-1, 1] per brick. A clipped eval mean of 124 corresponds to real in-game scores of 200-400+ when the tunnel strategy executes. Always verify with `watch.py` using `info[0]['episode']['r']` for true scores.
+14. **The tunnel exploit is real and learnable** — PPO_24 confirmed a real in-game score of 397 in a single observed game, with the ball trapped behind the brick wall. The strategy is discovered but not yet consistent. More training time should improve consistency.
+15. **High eval variance is meaningful** — PPO_24's ±88 standard deviation around a 105 mean reflects the bimodal nature of the tunnel strategy: either the agent finds it (very high score) or it doesn't (normal score). Variance is a signal, not noise.
+16. **GPU utilization looks deceptively low** — with 64 Atari envs on this hardware, the GPU only fires during PPO update steps. Average utilization of 4-6% with spikes to ~50% is normal and expected. The bottleneck is Python IPC overhead between environment workers, not GPU capacity.
+17. **fps drops after sleep/wake cycles** — Windows deprioritizes long-running background processes after sleep. Restarting the script restores full speed. Disable sleep during long training runs.
 
 ---
 
@@ -269,12 +366,14 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | Reward declining after peak | Instability or collapse | Check if both rollout AND eval are declining. If yes, stop and adjust |
 | `approx_kl` consistently above 0.1 | Updates too aggressive | Monitor closely. Above 0.15 = consider reducing learning rate |
 | `approx_kl` near 0.0 late in run | Policy frozen, LR exhausted | Fine to stop — best_model.zip already captured the peak |
-| fps suddenly drops | Hardware throttling | Close background apps, check GPU temp with `nvidia-smi` |
+| fps suddenly drops | Hardware throttling or sleep/wake cycle | Restart script. Close background apps. Check GPU with `nvidia-smi` |
 | best_model.zip not updating | Eval hasn't beaten previous best | Check eval logs with `get_eval_logs.py` |
 | Both rollout and eval declining | Real regression | Stop training, diagnose before continuing |
 | Rollout dips but eval holds | Exploration phase | Normal, wait it out |
 | value_loss climbing late in run | Agent reaching new score territory | Not a crisis — value function catching up to new behavior |
 | Strong improvement in final steps | Model had more to give | Run longer next time |
+| TensorBoard eval curve still rising at run end | Run was cut short of its ceiling | Continue as next run with reset_num_timesteps=False |
+| High variance in eval scores (±80 or more) | Bimodal strategy — tunnel found sometimes | More training time should improve consistency |
 
 ---
 
@@ -284,15 +383,27 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 # Check GPU status and temperature
 nvidia-smi
 
+# Watch GPU utilization live
+nvidia-smi -l 1
+
 # Monitor training in TensorBoard
 tensorboard --logdir ./tensorboard/
 
 # Parse evaluation log history (edit RUN_NAME in script first)
 python get_eval_logs.py
 
-# Watch trained agent play
+# Watch trained agent play (use info[0]['episode']['r'] for real scores)
 python watch.py
 
 # Probe Atari RAM addresses
 python probe_ram.py
+```
+
+### watch.py Real Score Note
+Training uses `ClipRewardEnv` so `reward` values in watch.py are clipped to [-1, 1]. To see true Atari scores, read from the Monitor wrapper's episode info:
+
+```python
+if done[0] and lives == 0:
+    real_score = info[0]['episode']['r']
+    print(f"Game {episode} finished | Real Score: {real_score:.0f}")
 ```

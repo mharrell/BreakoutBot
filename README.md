@@ -3,6 +3,8 @@
 A reinforcement learning agent trained to play Atari Breakout using PPO (Proximal Policy Optimization) via Stable-Baselines3. Built as a first foray into RL — no pretrained models or copied hyperparameters, everything discovered through systematic experimentation.
 
 ## Current Best Performance
+<img src="assets/tunnel_exploit.png" alt="Tunnel exploit in action" width="600">
+
 - **Peak Eval Score: 119.80** (pixel-based, PPO_23 at 217.6M timesteps)
 - **Best Individual Game: 43**
 - **Total Steps Trained: 244M+**
