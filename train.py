@@ -8,7 +8,7 @@ from stable_baselines3.common.vec_env import VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_25"
+RUN_NAME = "PPO_26"
 TOTAL_TIMESTEPS = 400_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 PPO24_CHECKPOINT_PATH = "./models/PPO_24/checkpoint"
