@@ -190,6 +190,7 @@ tensorboard --logdir ./tensorboard/
 | PPO_23 | Pixel | Same as PPO_22, n_eval_episodes=20, checkpoint resuming, 244M steps total | 119.80 | All-time best at 217.6M steps. Consistent 90-110+ eval floor in final stretch |
 | PPO_24 | Pixel | Same as PPO_23, seed=None, n_eval_episodes=50, ~300M steps | 124.00 | New all-time best at 265.6M steps. Confirmed tunnel exploit (397 real points observed). TensorBoard shows upward trend at run end — more steps warranted |
 | PPO_25 | Pixel | Continued from PPO_24 checkpoint, same config, 1B+ steps | **140.94** ✅ | All-time best at 838M steps. Real game scores of 600+ observed. Tunnel exploit fires at ~3-5% rate in single-env play. Floor locked above 90 in final stretch. Training continued indefinitely via restart behavior |
+| PPO_26 | Pixel | Same as PPO_25 + repeat_action_probability=0.25, started from PPO_25 best_model | In progress | Testing sticky actions to improve ball tracking and funnel consistency |
 
 ### PPO_24 Eval Score History
 

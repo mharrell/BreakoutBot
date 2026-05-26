@@ -11,7 +11,7 @@ gym.register_envs(ale_py)
 RUN_NAME = "PPO_26"
 TOTAL_TIMESTEPS = 400_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
-PPO24_CHECKPOINT_PATH = "./models/PPO_24/checkpoint"
+PPO25_BEST_MODEL_PATH = "./models/PPO_25/best_model"
 
 def linear_schedule(start: float, end: float):
     def schedule(progress_remaining: float) -> float:
@@ -24,10 +24,12 @@ def get_latest_checkpoint(path):
         return None
     return max(checkpoints, key=os.path.getmtime)
 
-env = make_atari_env("ALE/Breakout-v5", n_envs=64, seed=None)
+env = make_atari_env("ALE/Breakout-v5", n_envs=64, seed=None,
+                     env_kwargs={"repeat_action_probability": 0.25})
 env = VecFrameStack(env, n_stack=4)
 
-eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None)
+eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
+                          env_kwargs={"repeat_action_probability": 0.25})
 eval_env = VecFrameStack(eval_env, n_stack=4)
 
 eval_callback = EvalCallback(
@@ -51,7 +53,7 @@ checkpoint_callback = CheckpointCallback(
 
 callbacks = CallbackList([eval_callback, checkpoint_callback])
 
-# Priority 1: resume from a PPO_25 checkpoint (if this run has been interrupted)
+# Priority 1: resume from a PPO_26 checkpoint (if this run has been interrupted)
 resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
 if resume_path:
@@ -60,16 +62,16 @@ if resume_path:
     reset_num_timesteps = False
 
 else:
-    # Priority 2: start from PPO_24's final checkpoint
-    ppo24_path = get_latest_checkpoint(PPO24_CHECKPOINT_PATH)
-    if not ppo24_path:
+    # Priority 2: start from PPO_25's best_model
+    if not os.path.exists(PPO25_BEST_MODEL_PATH + ".zip"):
         raise FileNotFoundError(
-            f"No PPO_24 checkpoint found at {PPO24_CHECKPOINT_PATH}. "
+            f"No PPO_25 best_model found at {PPO25_BEST_MODEL_PATH}. "
             f"Check the path and try again."
         )
 
-    print(f"Starting {RUN_NAME} from PPO_24 final checkpoint: {ppo24_path}")
-    model = PPO.load(ppo24_path, env=env, device="cuda")
+    print(f"Starting {RUN_NAME} from PPO_25 best_model: {PPO25_BEST_MODEL_PATH}")
+    model = PPO.load(PPO25_BEST_MODEL_PATH, env=env, device="cuda",
+                     custom_objects={"n_envs": 64})
 
     # Restore schedules — not saved in checkpoint, must be reassigned
     model.learning_rate = linear_schedule(2.5e-4, 1e-5)
@@ -77,7 +79,7 @@ else:
     model.ent_coef = 0.006
     model.tensorboard_log = f"./tensorboard/{RUN_NAME}"
 
-    reset_num_timesteps = False  # Continue step count from PPO_24
+    reset_num_timesteps = True  # Fresh step count for PPO_26
 
 model.learn(
     total_timesteps=TOTAL_TIMESTEPS,

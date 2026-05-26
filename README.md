@@ -9,8 +9,10 @@ A reinforcement learning agent trained to play Atari Breakout using PPO (Proxima
 - **Peak Eval Score:** 140.94 (pixel-based, PPO_25 at 838M timesteps)
 - **Best Real Game Score:** 600+ (confirmed tunnel exploit — ball trapped behind brick wall)
 - **Total Steps Trained:** 1 billion+
-- **Current Run:** PPO_25 — direct continuation from PPO_24's final checkpoint. Same proven config with `seed=None` for ball direction generalization. Training continues indefinitely via checkpoint resuming across system restarts. All-time eval record set at 838M steps.
-
+- **Current Run:** **Current Run:** PPO_26 — started from PPO_25's best_model (838M step checkpoint, 
+140.94 eval record). Key change: added `repeat_action_probability=0.25` to force 
+reactive ball-tracking rather than positional memorization. Fresh step count, 
+targeting 400M steps.
 ---
 
 ## Approach
