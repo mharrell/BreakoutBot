@@ -1,7 +1,7 @@
 import numpy as np
 import os
 
-RUN_NAME = "PPO_25"
+RUN_NAME = "PPO_27"
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 log_path = os.path.join(project_root, "logs", RUN_NAME, "evaluations.npz")

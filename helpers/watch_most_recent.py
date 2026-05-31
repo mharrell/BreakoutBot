@@ -8,7 +8,7 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_25"
+RUN_NAME = "PPO_26"
 CHECKPOINT_PATH = f"../models/{RUN_NAME}/checkpoint"
 DETERMINISTIC = True  # True = best play, False = natural/varied
 
@@ -22,7 +22,7 @@ model_path = get_latest_checkpoint(CHECKPOINT_PATH)
 if not model_path:
     raise FileNotFoundError(f"No checkpoint found at {CHECKPOINT_PATH}")
 
-env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None, env_kwargs={"render_mode": "human"})
+env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None, env_kwargs={"render_mode": "human", "repeat_action_probability": 0.25})
 env = VecFrameStack(env, n_stack=4)
 
 print(f"Loading model from: {os.path.abspath(model_path)}")
