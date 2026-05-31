@@ -3,6 +3,9 @@
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+      <excludeFolder url="file://$MODULE_DIR$/logs" />
+      <excludeFolder url="file://$MODULE_DIR$/models" />
+      <excludeFolder url="file://$MODULE_DIR$/tensorboard" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.12 (breakoutBot)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

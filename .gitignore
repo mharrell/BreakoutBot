@@ -3,7 +3,7 @@
 models/
 logs/
 tensorboard/
-__pycache__/
 recordings/
+__pycache__/
 *.zip
 *.pyc
