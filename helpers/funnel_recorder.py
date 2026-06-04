@@ -13,7 +13,7 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_25"
+RUN_NAME = "PPO_27"
 MODEL_PATH = f"../models/{RUN_NAME}/best_model"
 FUNNEL_THRESHOLD = 500
 OUTPUT_DIR = "../recordings"
