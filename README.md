@@ -189,4 +189,4 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 
 ## Reference
 
-See [RL_REFERENCE.md](RL_REFERENCE.md) for a full guide to PPO hyperparameters, training metrics, hardware notes, RAM addresses, reward shaping design, and the decision framework used throughout this project.RENCE.md](RL_REFERENCE.md) for a full guide to PPO hyperparameters, training metrics, hardware notes, RAM addresses, reward shaping design, and the decision framework used throughout this project.
+See [RL_REFERENCE.md](assets/oldDocs/PPO26 and PPO27/RL_REFERENCE.md) for a full guide to PPO hyperparameters, training metrics, hardware notes, RAM addresses, reward shaping design, and the decision framework used throughout this project.RENCE.md](RL_REFERENCE.md) for a full guide to PPO hyperparameters, training metrics, hardware notes, RAM addresses, reward shaping design, and the decision framework used throughout this project.

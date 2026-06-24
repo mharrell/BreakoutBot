@@ -10,11 +10,19 @@ from datetime import datetime
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_atari_env
 from stable_baselines3.common.vec_env import VecFrameStack
+import glob
+
+def get_latest_checkpoint(path):
+    checkpoints = glob.glob(os.path.join(path, "latest_checkpoint_*_steps.zip"))
+    if not checkpoints:
+        return None
+    return max(checkpoints, key=os.path.getmtime)
 
 gym.register_envs(ale_py)
 
 RUN_NAME = "PPO_27"
-MODEL_PATH = f"../models/{RUN_NAME}/best_model"
+# MODEL_PATH = f"../models/{RUN_NAME}/best_model"
+MODEL_PATH = get_latest_checkpoint(f"../models/{RUN_NAME}/checkpoint")
 FUNNEL_THRESHOLD = 500
 OUTPUT_DIR = "../recordings"
 TEMP_VIDEO = os.path.join(OUTPUT_DIR, "latest_game.mp4")
@@ -25,7 +33,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Load model
 sb3_utils.check_for_correct_spaces = lambda *args, **kwargs: None
-env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None)
+# env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None)
+env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
+                     env_kwargs={"repeat_action_probability": 0.25})
 env = VecFrameStack(env, n_stack=4)
 
 print(f"Loading model from: {os.path.abspath(MODEL_PATH)}")
