@@ -6,13 +6,11 @@ A reinforcement learning agent trained to play Atari Breakout using PPO (Proxima
 
 <img src="assets/tunnel_exploit.png" alt="Tunnel exploit in action" width="600">
 
-- **Peak Eval Score:** 140.94 (pixel-based, PPO_25 at 838M timesteps)
+- **Peak Eval Score:** 147.02 (pixel-based, sticky actions, PPO_27 at 867M timesteps)
 - **Best Real Game Score:** 600+ (confirmed tunnel exploit — ball trapped behind brick wall)
-- **Total Steps Trained:** 1 billion+
-- **Current Run:** **Current Run:** PPO_26 — started from PPO_25's best_model (838M step checkpoint, 
-140.94 eval record). Key change: added `repeat_action_probability=0.25` to force 
-reactive ball-tracking rather than positional memorization. Fresh step count, 
-targeting 400M steps.
+- **Total Steps Trained:** 2.9B+ combined across PPO_25/26/27
+- **Single-Env Leader (10k games):** PPO_26 — avg 54.3, median 46.0, **0% zero-score games**, funnel rate 0.07%
+- **Key Finding:** Sticky actions alone don't fix the zero-score failure mode — PPO_27 (fresh + sticky) hit 21.3% zero-score, *worse* than PPO_25's 20.0%. PPO_26's elimination of zero-score games came from combining a deep non-sticky foundation (838M steps) with sticky-action refinement (~1B steps).
 ---
 
 ## Approach
@@ -164,7 +162,9 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 | PPO_22 | Pixel | Linear LR + clip_range decay, n_envs=64, batch=2048, 60M steps | 87.2 | Previous best at 57.6M steps |
 | PPO_23 | Pixel | Same as PPO_22, n_eval_episodes=20, checkpoint resuming, 244M steps | 119.80 | All-time best at 217.6M steps. Consistent 90-110+ floor in final stretch |
 | PPO_24 | Pixel | Same as PPO_23, seed=None, n_eval_episodes=50, ~300M steps | 124.00 | New all-time best at 265.6M steps. Confirmed tunnel exploit (397 real points). Eval curve still rising at cutoff |
-| PPO_25 | Pixel | Continued from PPO_24 checkpoint, same config, 1B+ steps | **140.94** ✅ | All-time best at 838M steps. Real game scores of 600+ observed. Tunnel exploit confirmed at ~3-5% rate in single-env play. Floor locked in above 90 in final stretch |
+| PPO_25 | Pixel | Continued from PPO_24 checkpoint, same config, 1B+ steps, no sticky actions | 140.94 | All-time best at 838M steps. Real game scores of 600+ observed. Single-env (10k games): avg 34.6, 20.0% zero-score |
+| PPO_26 | Pixel | Continued from PPO_25 best_model + `repeat_action_probability=0.25`, 64 envs, ~1.84B total | 134.16 | **Best single-env model.** Completed at 1.84B steps. Single-env (10k games): avg 54.3, **0% zero-score**, funnel rate 0.07%. Outperforms PPO_25 on every single-env metric |
+| PPO_27 | Pixel | Fresh agent, `repeat_action_probability=0.25` from step one, 32 envs, ~867M steps | **147.02** ✅ | **All-time eval record.** Single-env (10k games): avg 27.9, 21.3% zero-score — *worst* single-env performance of the three, despite highest eval. Sticky-from-scratch underperformed sticky-on-inherited-weights |
 
 ---
 
@@ -183,10 +183,12 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 11. **Seed diversity improves generalization** — `seed=None` forces the agent to handle all ball launch directions, confirmed in PPO_24
 12. **Eval scores reflect parallel env sampling** — training eval runs 50 episodes across 64 parallel envs, producing a different score distribution than single-env sequential play. Single-env average (~56) is lower than eval mean (~100-140) due to this sampling difference, not model quality
 13. **The tunnel exploit is real, learnable, and measurable** — PPO_25 achieves tunnel completion in ~3-5% of single-env games, with scores of 200-600+ when it fires. The agent attempts multiple partial tunnels simultaneously rather than committing to one — improving tunnel consistency is the current open problem
-14. **Training indefinitely via restart behavior** — due to `reset_num_timesteps=False` and checkpoint loading, each system restart effectively resets the step budget, allowing training to continue well past the intended target. PPO_25 reached 1B+ steps this way
+15. **Sticky actions alone don't fix the zero-score failure mode** — PPO_27 (fresh + sticky, 867M steps) hit 21.3% zero-score, *worse* than PPO_25's 20.0%. The zero-score elimination in PPO_26 required a deep non-sticky foundation (838M steps) *before* sticky actions were added — the combination, not sticky alone, is what worked.
+16. **Eval score and single-env score are different leaderboards** — PPO_27 has the highest eval score (147.02) but the worst single-env performance (avg 27.9, 21.3% zero-score). PPO_26 has lower eval (134.16) but dominates single-env (avg 54.3, 0% zero-score). Never assume the eval leader is the best model for real sequential play.
+17. **Two-phase training (non-sticky → sticky) outperforms all-sticky-from-scratch** — PPO_26's recipe of 838M non-sticky steps followed by ~1B sticky steps produced better single-env results than PPO_27's 867M all-sticky steps across every metric measured. This strongly suggests sticky actions work best as a *refinement layer* on an already-competent policy, not as a primary training regime.
 
 ---
 
 ## Reference
 
-See [RL_REFERENCE.md](assets/oldDocs/PPO26 and PPO27/RL_REFERENCE.md) for a full guide to PPO hyperparameters, training metrics, hardware notes, RAM addresses, reward shaping design, and the decision framework used throughout this project.RENCE.md](RL_REFERENCE.md) for a full guide to PPO hyperparameters, training metrics, hardware notes, RAM addresses, reward shaping design, and the decision framework used throughout this project.
+See [RL_REFERENCE.md](RL_REFERENCE.md) for a full guide to PPO hyperparameters, training metrics, hardware notes, RAM addresses, reward shaping design, and the decision framework used throughout this project.

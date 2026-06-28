@@ -7,3 +7,6 @@ recordings/
 __pycache__/
 *.zip
 *.pyc
+claude.context/
+.opencode/
+opencode.jsonc

@@ -1,7 +1,7 @@
 # PPO Training Reference Guide
 ### Breakout RL Agent — Levers, Outputs & Experiment History
 
-**Current Best: 140.94 eval (pixel-based, PPO_25 at 838M steps) | Best Individual Game: 600+ (real score) | Total Steps Trained: 1B+**
+**Current Best: 143.36 eval (pixel-based, sticky actions, PPO_27 at 804.8M steps) | Previous Pre-Sticky Record: 140.94 (PPO_25 @ 838M) | Best Individual Game: 600+ (real score) | Total Steps Trained: 2B+ combined across PPO_25/26/27**
 
 ---
 
@@ -23,8 +23,9 @@ These are the parameters you control in `train.py`. Each one affects a different
 | `n_envs` | Number of parallel game environments | More = faster experience collection. Scale batch_size proportionally |
 | `total_timesteps` | Total training duration | More = more time to learn. PPO_23 showed major gains didn't arrive until 170M+ steps |
 | `device` | CPU vs GPU | MlpPolicy (RAM runs) runs faster on CPU. CnnPolicy (pixel runs) benefits from GPU |
+| `repeat_action_probability` | Sticky actions — chance a step repeats the previous action regardless of agent's choice | Forces reactive ball-tracking over positional memorization. Improves stability and general play, but reduces precise/optimal-execution strategies like the tunnel exploit |
 
-### Linear Schedule Pattern (Confirmed Working in PPO_22, PPO_23, PPO_24)
+### Linear Schedule Pattern (Confirmed Working in PPO_22, PPO_23, PPO_24, PPO_26, PPO_27)
 
 Decay both `learning_rate` and `clip_range` from full value to near-zero over the full run:
 
@@ -46,12 +47,13 @@ When resuming from a checkpoint, use `reset_num_timesteps=False` so the schedule
 
 This project has used two fundamentally different observation approaches:
 
-### Pixel-Based (PPO_5–14, PPO_20–25) ✅ Current approach
+### Pixel-Based (PPO_5–14, PPO_20–27) ✅ Current approach
 - Agent sees stacked frames of the game screen as images
 - Uses `CnnPolicy` — convolutional neural network processes visual input
 - Uses `make_atari_env` with `VecFrameStack(n_stack=4)`
 - Training speed: ~350-620 fps with 64 envs (varies with system state — see Hardware Notes)
 - More generalizable. Best results in this project.
+- PPO_26 and PPO_27 add `repeat_action_probability=0.25` (sticky actions) on top of this approach — see Part 6 and EXPERIMENTS.md for findings.
 
 ### RAM-Based (PPO_15–19) — Abandoned
 - Agent sees the 128-byte Atari RAM directly as structured data
@@ -97,6 +99,14 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 ### Important Note on ClipRewardEnv
 `make_atari_env` automatically applies `ClipRewardEnv`, which clips all rewards to [-1, 1] during training. This means every brick hit returns exactly 1.0 regardless of actual point value. The agent learns entirely from clipped signals, yet still discovers high-value strategies like the tunnel exploit. Eval scores reported during training reflect clipped rewards — real in-game scores are much higher. A clipped eval score of ~140 corresponds to real game scores of 300-600+ when the tunnel strategy executes. Single-env watch scripts average ~56 per game, while training eval means of 100-140 reflect the parallel sampling of 50 episodes across 64 environments.
 
+**Commentary — what the agent has actually been optimizing for:** Because `ClipRewardEnv` flattens every brick hit to exactly 1.0, every run in this project (PPO_5 through PPO_27) has never directly trained on raw point score. The true training signal has always been **bricks removed**, not score — a brick worth 1 point and a brick worth 7 points contribute identically to the training reward. Real score is a downstream readout used for eval and comparison between runs, not the thing being optimized during gradient updates. This matters for interpreting results: the project's apparent successes (and the tunnel exploit specifically) emerged from a process-style objective — "clear bricks" — rather than an outcome-style objective — "maximize point total." The fact that this also happens to produce excellent real-score outcomes is a useful existence proof that a well-chosen process metric, here forced by an environment wrapper rather than deliberately designed, can outperform optimizing the raw outcome directly. It does **not** mean every process proxy works this well — see the paddle-bounce/episode-length reward-hacking analysis in EXPERIMENTS.md (Experiment 1, Option D discussion) for a process proxy that fails badly, and contrast with why "bricks removed" succeeds where "bounces + survival time" would not: there is no cheap way to rack up brick-clear reward without actually clearing bricks, whereas bounces and episode length can both be maximized by a degenerate strategy (e.g. a stable vertical ball loop) that never touches a brick at all.
+
+### Sticky Actions as an Environment-Level Intervention (PPO_26, PPO_27)
+Unlike reward shaping, `repeat_action_probability=0.25` doesn't touch the reward signal at all — it modifies the environment dynamics so 25% of steps repeat the previous action regardless of what the agent chose. This is the Machado et al. (2018) standard mitigation for memorization in deterministic Atari environments. Confirmed effects:
+- Improves training stability and general single-env play consistency
+- Reduces tunnel exploit completion rate (precise execution becomes harder when actions are occasionally overridden)
+- Full comparative results in EXPERIMENTS.md
+
 ---
 
 ## Part 4: Training Outputs
@@ -135,6 +145,7 @@ shaped_reward = game_reward + 0.1 * tracking_reward
 - Pixel runs with 64 envs: **350-620 fps** depending on system state
 - fps drops significantly after sleep/wake cycles — Windows deprioritizes the process. Restart the script to recover full speed
 - Running from PyCharm adds slight overhead vs running `python train.py` directly from PowerShell
+- PPO_26 (64 envs) and PPO_27 (32 envs) trained simultaneously, sharing one GPU — neither ran at full available speed during that period
 
 ### GPU Utilization Pattern
 PPO with 64 Atari environments is **CPU-bound during rollout collection** and GPU-bound only during the update step. This creates a bursty pattern: GPU spikes to ~40-50% during updates, then drops near 0% while the CPU steps all 64 environments. Average GPU utilization appears low (~4-6%) but this is normal and expected — not a misconfiguration.
@@ -189,330 +200,25 @@ tensorboard --logdir ./tensorboard/
 | PPO_22 | Pixel | n_envs=64, batch=2048, linear LR 2.5e-4→1e-5, linear clip 0.2→0.05, 60M steps | 87.2 | Previous best at 57.6M steps |
 | PPO_23 | Pixel | Same as PPO_22, n_eval_episodes=20, checkpoint resuming, 244M steps total | 119.80 | All-time best at 217.6M steps. Consistent 90-110+ eval floor in final stretch |
 | PPO_24 | Pixel | Same as PPO_23, seed=None, n_eval_episodes=50, ~300M steps | 124.00 | New all-time best at 265.6M steps. Confirmed tunnel exploit (397 real points observed). TensorBoard shows upward trend at run end — more steps warranted |
-| PPO_25 | Pixel | Continued from PPO_24 checkpoint, same config, 1B+ steps | **140.94** ✅ | All-time best at 838M steps. Real game scores of 600+ observed. Tunnel exploit fires at ~3-5% rate in single-env play. Floor locked above 90 in final stretch. Training continued indefinitely via restart behavior |
-| PPO_26 | Pixel | Same as PPO_25 + repeat_action_probability=0.25, started from PPO_25 best_model | In progress | Testing sticky actions to improve ball tracking and funnel consistency |
+| PPO_25 | Pixel | Continued from PPO_24 checkpoint, same config, 1B+ steps, no sticky actions | 140.94 | Held all-time record until surpassed by PPO_27. Real game scores of 600+ observed. Tunnel exploit fires at ~3-5% rate in single-env play |
+| PPO_26 | Pixel | Continued from PPO_25 best_model + `repeat_action_probability=0.25`, 64 envs, fresh step count | 134.16 | New PPO_26 high at 905.6M steps. Highly oscillating training — latest batch swung 71.50–134.16. Inherited weights gave early advantage but advantage eroded over time (see EXPERIMENTS.md) |
+| PPO_27 | Pixel | Fresh agent, `repeat_action_probability=0.25` from step one, 32 envs | **143.36** ✅ | **Current all-time record across all runs**, set at 804.8M steps — surpasses PPO_25's prior 140.94. Most stable of the three: latest batch averaged 112.3 vs PPO_26's 104.2, with tighter oscillation |
 
-### PPO_24 Eval Score History
+### Eval Score History — Condensed Summaries
 
-*Note: Early eval logs (0–169M) lost to unexpected system restart. Data available from 169M onward.*
+*Full per-checkpoint logs for each run live in `logs/<RUN_NAME>/evaluations.npz` and can be regenerated anytime with `python helpers/get_eval_logs.py`. The tables below summarize the shape of each run rather than reproducing every logged step.*
 
-| Timestep | Eval Reward |
-|----------|-------------|
-| 169,600,000 | 96.18 |
-| 172,800,000 | 86.30 |
-| 176,000,000 | 89.18 |
-| 179,200,000 | 80.32 |
-| 182,400,000 | 72.34 |
-| 185,600,000 | 72.96 |
-| 188,800,000 | 76.18 |
-| 192,000,000 | 95.22 |
-| 195,200,000 | 77.84 |
-| 198,400,000 | 70.48 |
-| 201,600,000 | 91.48 |
-| 204,800,000 | 77.68 |
-| 208,000,000 | 94.34 |
-| 211,200,000 | 104.88 |
-| 214,400,000 | 86.12 |
-| 217,600,000 | 90.56 |
-| 220,800,000 | 101.76 |
-| 224,000,000 | 81.48 |
-| 227,200,000 | 84.34 |
-| 230,400,000 | 88.04 |
-| 233,600,000 | 79.04 |
-| 236,800,000 | 96.14 |
-| 240,000,000 | 84.96 |
-| 243,200,000 | 86.26 |
-| 246,400,000 | 68.30 |
-| 249,600,000 | 83.98 |
-| 252,800,000 | 98.80 |
-| 256,000,000 | 93.20 |
-| 259,200,000 | 78.84 |
-| 262,400,000 | 89.64 |
-| 265,600,000 | **124.00** 🏆 |
-| 268,800,000 | 73.54 |
-| 272,000,000 | 117.76 |
-| 275,200,000 | 105.18 |
-| 278,400,000 | 83.22 |
-| 281,600,000 | 94.66 |
-| 284,800,000 | 91.62 |
-| 288,000,000 | 82.48 |
-| 291,200,000 | 83.42 |
-| 294,400,000 | 91.48 |
-| 297,600,000 | 101.12 |
-| 300,800,000 | 117.14 |
+| Run | Steps Covered | Batch/Run Avg | Peak Eval | Low Point | Notes |
+|-----|---------------|---------------|-----------|-----------|-------|
+| PPO_13 | 1.6M – 24.0M | ~37 | **85.4** @ 19.2M | 27.6 @ 16.0M | First major breakthrough; collapsed immediately after peak (no LR decay yet) |
+| PPO_22 | 3.2M – 57.6M | ~44 | **87.2** @ 57.6M | 22.9 @ 6.4M | Steady upward climb with linear LR/clip decay confirmed working |
+| PPO_23 | 99.2M – 243.2M | ~82 | **119.80** @ 217.6M | 50.35 @ 131.2M | Consistent 90-110+ floor in final stretch |
+| PPO_24 | 169.6M – 300.8M | ~89 | **124.00** @ 265.6M | 68.30 @ 246.4M | Confirmed tunnel exploit (397 real points). Eval curve still rising at cutoff |
+| PPO_25 | 342.4M – 1,004.8M | ~104 | **140.94** @ 838.4M | 71.72 @ 345.6M | Held all-time record until surpassed by PPO_27. Real game scores of 600+ observed. Large log gaps (390.4M–412.8M, 464.0M–489.6M, 652.8M–681.6M, 860.8M–918.4M) from system restarts |
+| PPO_26 (latest batch) | 889.6M – 947.2M | 104.2 | **134.16** @ 905.6M | 71.50 @ 947.2M | Batch ends on a downward note right after its own record — flagged for the PPO_26 tail-diagnosis investigation in EXPERIMENTS.md |
+| PPO_27 (latest batch) | 798.4M – 856.0M | 112.3 | **143.36** @ 804.8M 🏆 | 88.34 @ 800.0M | **Current all-time record across all runs.** Tighter, more consistent batch than PPO_26's equivalent window |
 
-### PPO_25 Eval Score History (Current Best Run)
-
-*Note: PPO_25 continued directly from PPO_24's final checkpoint. Multiple system restarts throughout training caused some eval log gaps — key checkpoints manually preserved. Steps reflect cumulative count from PPO_24's start.*
-
-| Timestep | Eval Reward |
-|----------|-------------|
-| 342,400,000 | 87.34 |
-| 345,600,000 | 71.72 |
-| 348,800,000 | 98.54 |
-| 352,000,000 | 79.78 |
-| 355,200,000 | 98.26 |
-| 358,400,000 | 97.88 |
-| 361,600,000 | 91.04 |
-| 364,800,000 | 93.80 |
-| 368,000,000 | 80.14 |
-| 371,200,000 | 86.84 |
-| 374,400,000 | 83.52 |
-| 377,600,000 | 88.88 |
-| 380,800,000 | 97.10 |
-| 384,000,000 | 83.94 |
-| 387,200,000 | 100.58 |
-| 390,400,000 | 99.08 |
-| 412,800,000 | 80.48 |
-| 416,000,000 | 97.94 |
-| 419,200,000 | 111.80 |
-| 422,400,000 | 93.22 |
-| 425,600,000 | 80.62 |
-| 428,800,000 | 90.64 |
-| 432,000,000 | 106.30 |
-| 435,200,000 | 94.82 |
-| 438,400,000 | 93.96 |
-| 441,600,000 | 87.44 |
-| 444,800,000 | 106.74 |
-| 448,000,000 | 94.38 |
-| 451,200,000 | 87.90 |
-| 454,400,000 | 108.30 |
-| 457,600,000 | 100.76 |
-| 460,800,000 | **138.46** |
-| 464,000,000 | 109.22 |
-| 489,600,000 | 85.72 |
-| 492,800,000 | 92.24 |
-| 496,000,000 | 98.58 |
-| 499,200,000 | 99.36 |
-| 502,400,000 | 103.50 |
-| 505,600,000 | 103.64 |
-| 508,800,000 | 116.30 |
-| 512,000,000 | 109.18 |
-| 515,200,000 | 98.26 |
-| 518,400,000 | 72.70 |
-| 521,600,000 | 125.28 |
-| 524,800,000 | 86.28 |
-| 528,000,000 | 89.00 |
-| 531,200,000 | 96.80 |
-| 534,400,000 | 93.22 |
-| 537,600,000 | 96.44 |
-| 540,800,000 | 108.74 |
-| 544,000,000 | 93.24 |
-| 547,200,000 | 110.54 |
-| 550,400,000 | 110.36 |
-| 553,600,000 | 110.66 |
-| 556,800,000 | 99.90 |
-| 560,000,000 | 88.22 |
-| 563,200,000 | 120.74 |
-| 566,400,000 | 111.98 |
-| 569,600,000 | 81.90 |
-| 572,800,000 | 85.40 |
-| 576,000,000 | 92.10 |
-| 579,200,000 | 98.84 |
-| 582,400,000 | 89.88 |
-| 585,600,000 | 97.52 |
-| 588,800,000 | 127.14 |
-| 592,000,000 | 120.44 |
-| 595,200,000 | 104.76 |
-| 598,400,000 | 96.68 |
-| 601,600,000 | 115.08 |
-| 604,800,000 | 101.20 |
-| 608,000,000 | 114.18 |
-| 611,200,000 | 136.14 |
-| 614,400,000 | 88.88 |
-| 617,600,000 | 99.12 |
-| 620,800,000 | 92.16 |
-| 624,000,000 | 112.72 |
-| 627,200,000 | 99.50 |
-| 630,400,000 | 106.22 |
-| 633,600,000 | 127.54 |
-| 636,800,000 | 101.12 |
-| 640,000,000 | 103.12 |
-| 643,200,000 | 137.10 |
-| 646,400,000 | 109.36 |
-| 649,600,000 | 94.52 |
-| 652,800,000 | 106.22 |
-| 681,600,000 | 104.96 |
-| 684,800,000 | 109.06 |
-| 688,000,000 | 102.76 |
-| 691,200,000 | 99.68 |
-| 694,400,000 | 92.90 |
-| 697,600,000 | 105.58 |
-| 700,800,000 | 107.30 |
-| 704,000,000 | 89.78 |
-| 707,200,000 | 123.82 |
-| 710,400,000 | 109.60 |
-| 713,600,000 | 96.52 |
-| 716,800,000 | 105.56 |
-| 720,000,000 | 115.04 |
-| 723,200,000 | 92.74 |
-| 726,400,000 | 87.68 |
-| 729,600,000 | 98.38 |
-| 732,800,000 | 102.88 |
-| 736,000,000 | 94.10 |
-| 739,200,000 | 96.02 |
-| 742,400,000 | 93.44 |
-| 745,600,000 | 126.36 |
-| 748,800,000 | 101.44 |
-| 752,000,000 | 91.10 |
-| 755,200,000 | 100.86 |
-| 758,400,000 | 92.22 |
-| 761,600,000 | 126.06 |
-| 764,800,000 | 129.94 |
-| 768,000,000 | 107.48 |
-| 771,200,000 | 93.40 |
-| 774,400,000 | 109.26 |
-| 777,600,000 | 106.82 |
-| 780,800,000 | 115.22 |
-| 784,000,000 | 125.10 |
-| 787,200,000 | 89.88 |
-| 790,400,000 | 110.38 |
-| 793,600,000 | 105.14 |
-| 796,800,000 | 121.72 |
-| 800,000,000 | 134.08 |
-| 803,200,000 | 105.84 |
-| 806,400,000 | 109.74 |
-| 809,600,000 | 90.20 |
-| 812,800,000 | 96.36 |
-| 816,000,000 | 133.66 |
-| 819,200,000 | 98.62 |
-| 822,400,000 | 96.90 |
-| 825,600,000 | 97.16 |
-| 828,800,000 | 123.44 |
-| 832,000,000 | 100.94 |
-| 835,200,000 | 97.22 |
-| 838,400,000 | **140.94** 🏆 |
-| 841,600,000 | 103.34 |
-| 844,800,000 | 91.32 |
-| 848,000,000 | 117.46 |
-| 851,200,000 | 133.80 |
-| 854,400,000 | 115.74 |
-| 857,600,000 | 118.04 |
-| 860,800,000 | 116.86 |
-| 918,400,000 | 93.70 |
-| 921,600,000 | 117.60 |
-| 924,800,000 | 110.18 |
-| 928,000,000 | 100.10 |
-| 931,200,000 | 114.04 |
-| 934,400,000 | 109.24 |
-| 937,600,000 | 85.64 |
-| 940,800,000 | 87.70 |
-| 944,000,000 | 116.50 |
-| 947,200,000 | 133.02 |
-| 950,400,000 | 119.76 |
-| 953,600,000 | 93.48 |
-| 956,800,000 | 89.22 |
-| 960,000,000 | 93.02 |
-| 963,200,000 | 99.54 |
-| 966,400,000 | 100.40 |
-| 969,600,000 | 90.62 |
-| 972,800,000 | 106.12 |
-| 976,000,000 | 106.10 |
-| 979,200,000 | 114.56 |
-| 982,400,000 | 127.64 |
-| 985,600,000 | 113.74 |
-| 988,800,000 | 101.34 |
-| 992,000,000 | 96.22 |
-| 995,200,000 | 97.82 |
-| 998,400,000 | 115.82 |
-| 1,001,600,000 | 100.44 |
-| 1,004,800,000 | 98.12 |
-
-### PPO_23 Eval Score History
-
-| Timestep | Eval Reward |
-|----------|-------------|
-| 99,200,000 | 65.65 |
-| 102,400,000 | 82.65 |
-| 105,600,000 | 74.60 |
-| 108,800,000 | 65.35 |
-| 112,000,000 | 79.10 |
-| 115,200,000 | 50.60 |
-| 118,400,000 | 66.35 |
-| 121,600,000 | 69.25 |
-| 124,800,000 | 64.80 |
-| 128,000,000 | 73.20 |
-| 131,200,000 | 50.35 |
-| 134,400,000 | 82.85 |
-| 137,600,000 | 78.10 |
-| 140,800,000 | 63.95 |
-| 144,000,000 | 83.65 |
-| 147,200,000 | 76.40 |
-| 150,400,000 | 71.70 |
-| 153,600,000 | 63.15 |
-| 156,800,000 | 77.85 |
-| 160,000,000 | 82.20 |
-| 163,200,000 | 86.20 |
-| 166,400,000 | 78.70 |
-| 169,600,000 | 118.70 |
-| 172,800,000 | 61.75 |
-| 176,000,000 | 70.85 |
-| 179,200,000 | 79.25 |
-| 182,400,000 | 79.70 |
-| 185,600,000 | 117.20 |
-| 188,800,000 | 60.05 |
-| 192,000,000 | 82.20 |
-| 195,200,000 | 97.65 |
-| 198,400,000 | 90.55 |
-| 201,600,000 | 94.50 |
-| 204,800,000 | 102.95 |
-| 208,000,000 | 75.30 |
-| 211,200,000 | 97.55 |
-| 214,400,000 | 97.85 |
-| 217,600,000 | **119.80** |
-| 220,800,000 | 83.90 |
-| 224,000,000 | 105.70 |
-| 227,200,000 | 108.40 |
-| 230,400,000 | 86.55 |
-| 233,600,000 | 100.45 |
-| 236,800,000 | 89.95 |
-| 240,000,000 | 116.45 |
-| 243,200,000 | 108.65 |
-
-### PPO_22 Eval Score History
-
-| Timestep | Eval Reward |
-|----------|-------------|
-| 3,200,000 | 25.5 |
-| 6,400,000 | 22.9 |
-| 9,600,000 | 30.2 |
-| 12,800,000 | 31.7 |
-| 16,000,000 | 32.3 |
-| 19,200,000 | 35.3 |
-| 22,400,000 | 35.7 |
-| 25,600,000 | 52.1 |
-| 28,800,000 | 28.0 |
-| 32,000,000 | 44.7 |
-| 35,200,000 | 43.9 |
-| 38,400,000 | 47.7 |
-| 41,600,000 | 52.7 |
-| 44,800,000 | 50.0 |
-| 48,000,000 | 62.3 |
-| 51,200,000 | 60.8 |
-| 54,400,000 | 65.4 |
-| 57,600,000 | **87.2** |
-
-### PPO_13 Eval Score History (First Major Breakthrough)
-
-| Timestep | Eval Reward |
-|----------|-------------|
-| 1,600,000 | 32.2 |
-| 3,200,000 | 33.4 |
-| 4,800,000 | 39.0 |
-| 6,400,000 | 47.4 |
-| 8,000,000 | 32.0 |
-| 9,600,000 | 35.8 |
-| 11,200,000 | 37.6 |
-| 12,800,000 | 37.0 |
-| 14,400,000 | 33.8 |
-| 16,000,000 | 27.6 |
-| 17,600,000 | 42.6 |
-| 19,200,000 | **85.4** |
-| 20,800,000 | 38.6 |
-| 22,400,000 | 41.2 |
-| 24,000,000 | 31.2 |
-
----
+**All-time record progression:** PPO_13 (85.4) → PPO_22 (87.2) → PPO_23 (119.80) → PPO_24 (124.00) → PPO_25 (140.94) → **PPO_27 (143.36, current)**
 
 ## Part 7: Key Lessons Learned
 
@@ -534,6 +240,10 @@ tensorboard --logdir ./tensorboard/
 16. **GPU utilization looks deceptively low** — with 64 Atari envs on this hardware, the GPU only fires during PPO update steps. Average utilization of 4-6% with spikes to ~50% is normal and expected. The bottleneck is Python IPC overhead between environment workers, not GPU capacity.
 17. **fps drops after sleep/wake cycles** — Windows deprioritizes long-running background processes after sleep. Restarting the script restores full speed. Disable sleep during long training runs.
 18. **Training can continue indefinitely via restart behavior** — with `reset_num_timesteps=False` and checkpoint loading, each system restart effectively resets the step budget against the saved checkpoint's step count. PPO_25 reached 1B+ steps this way, well past the intended 400M target. Intentional or not, this enabled discovering the performance ceiling more thoroughly.
+19. **Fresh sticky-action training eventually overtook inherited weights in peak performance** — PPO_27 (fresh agent, sticky actions from step one) surpassed both PPO_26 (inherited PPO_25 weights + sticky actions) and the original PPO_25 record to set a new all-time high of 143.36 @ 804.8M steps. This resolves the open question from Experiment 1: total training time on a clean, environment-consistent policy foundation matters more in the long run than inheriting a billion steps of prior (mismatched) experience.
+20. **PPO_27's stability advantage compounds over time** — in directly comparable recent batches, PPO_27's eval mean (112.3) now exceeds PPO_26's (104.2), with visibly tighter oscillation. PPO_26's most recent batch ended on a downward note (71.50 after a 134.16 peak just a few checkpoints prior) — worth watching for a real regression vs. normal noise.
+21. **Sticky actions trade tunnel-exploit frequency for general consistency and ceiling** — the tradeoff identified in Experiment 1 still holds directionally, but PPO_27's results show that, given enough training, the "general consistency" side of that trade can also produce a higher absolute peak score than the no-sticky-action baseline (PPO_25). The funnel-rate cost remains the open problem (see EXPERIMENTS.md).
+22. **The project has effectively been training on a process metric all along, not raw score** — `ClipRewardEnv` flattens every brick hit to 1.0 regardless of point value, so the real training signal across every run has been "bricks removed," with raw score only ever used as an eval/comparison readout. This is a useful real-world data point for process-vs-outcome reward design: a well-chosen process proxy ("clear bricks") produced excellent outcome results ("high score") here, while a different process proxy tried explicitly (paddle bounces + episode length, see EXPERIMENTS.md Experiment 1 Option D discussion) would not have, because it admits a degenerate high-reward strategy that never engages with the actual task.
 
 ---
 

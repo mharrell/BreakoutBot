@@ -2,7 +2,7 @@
 
 ## Experiment 1: Sticky Actions and Training Regime — PPO_26 vs PPO_27
 
-> **Status update (latest evals):** Both runs hit new personal records in the most recent batch — PPO_26 reached 134.16 @ 905.6M, and PPO_27 reached **143.36 @ 804.8M**, which is now the **new all-time record across all three runs**, surpassing PPO_25's original 140.94. See updated Results and Conclusions below.
+> **Status update:** Both runs have now **completed**. PPO_26 finished at 1,001,828,352 total steps (eval peak 134.16 @ 905.6M). PPO_27 finished at ~867M steps with eval peak **147.02 @ 867.2M** — the new all-time eval record. Both runs' full 10,000-game single-env funnel baselines are **complete** — see the updated Results and Conclusions below, including a critical correction to the earlier "sticky actions eliminate zero-score" finding.
 
 ### Background
 
@@ -61,9 +61,9 @@ model = PPO(
 | First eval above 80 | ~22M steps | ~129M steps |
 | First eval above 90 | ~131M steps | ~169M steps |
 | First eval above 100 | 304M steps | 299M steps |
-| All-time peak (as of latest evals) | 134.16 @ 905.6M steps | **143.36 @ 804.8M steps** 🏆 — new all-time record, surpasses PPO_25's 140.94 |
+| All-time eval peak | 134.16 @ 905.6M steps (run complete) | **147.02 @ 867.2M steps** 🏆 — new all-time record, surpasses PPO_25's 140.94 (run ongoing) |
 
-PPO_26's inherited weights gave it a significant early advantage — it hit 80+ within 22M steps while PPO_27 took 129M. PPO_27 caught up and both crossed 100 at nearly identical step counts (~300M). **Since then, PPO_27 has pulled ahead decisively** — its 143.36 peak not only beats PPO_26's 134.16 but also overtakes PPO_25's original 140.94, making PPO_27 the outright champion across all runs to date.
+PPO_26's inherited weights gave it a significant early advantage — it hit 80+ within 22M steps while PPO_27 took 129M. PPO_27 caught up and both crossed 100 at nearly identical step counts (~300M). **Since then, PPO_27 has pulled ahead decisively on eval score** — its 147.02 peak beats both PPO_26's final 134.16 and PPO_25's original 140.94. Note, however, that eval score and single-env score tell different stories here — see the updated Single-Env Watch Performance section below, where PPO_26 currently leads.
 
 #### Convergence Speed
 
@@ -79,51 +79,82 @@ PPO_26 showed significantly wider oscillation throughout, with eval scores swing
 
 PPO_27's oscillation has remained tighter and more consistent by comparison. In its most recent logged batch (798.4M–856.0M), PPO_27 averaged 112.3 against PPO_26's 104.2 over a comparable batch — and PPO_27's lowest score in that batch (88.34) is still well above PPO_26's batch low (71.50). This is visible in the approx_kl values from earlier in the runs — PPO_27 consistently showed lower KL divergence (0.007-0.020) vs PPO_26 (0.025-0.090).
 
-#### Single-Env Watch Performance
+#### Single-Env Watch Performance — Matched 10,000-Game Funnel Runs (Completed)
 
-All three models were evaluated using the same `record_funnels.py` script with threshold 500, deterministic=True, single environment, against their respective best_model checkpoints. PPO_26 was run for 874 games before a manual stop; PPO_27 was left running overnight reaching 9,000+ games with its average fully converged.
+All three runs now have matched 10,000-game single-env evaluations using identical scripts (`funnel_recorder_ppo_25.py` / `funnel_recorder_ppo_26.py` / `funnel_recorder_ppo_27.py`), identical funnel threshold (400+), and sticky-action config per run.
 
-| Metric | PPO_25 (no sticky) | PPO_26 (inherited + sticky) | PPO_27 (fresh + sticky) |
-|--------|-------------------|----------------------------|------------------------|
-| Average score | ~36 | ~53 | ~23.5 |
-| Best score | 337 | 396 | 390 |
-| Funnel rate (200+ pts) | ~2.2% (11/506) | ~1.8% (9/502) | ~0.8% (4/500) |
-| Games sampled | 506 | 874 | 9,000+ |
+| Metric | PPO_25 (no sticky, 10,000 games) | PPO_26 (inherited + sticky, 10,000 games) | PPO_27 (fresh + sticky, 10,000 games) |
+|--------|----------------------------------|--------------------------------------------|---------------------------------------|
+| Average score | 34.6 | **54.3** | 27.9 |
+| Median score | 30.0 | **46.0** | 23.0 |
+| Std dev | 39.5 | 46.4 | 32.2 |
+| Min score | 0 | **5** | 0 |
+| Zero-score games | 1,998 (20.0%) | **0 (0.0%)** | 2,127 (21.3%) |
+| Best score | 406 | **415** | 406 |
+| Funnel rate (400+) | 2/10,000 (0.02%) | **7/10,000 (0.07%)** | 1/10,000 (0.01%) |
 
-**Unexpected result — PPO_26 has the highest single-env average score.** Despite having sticky actions applied mid-career on top of billion steps of non-sticky training, PPO_26 averaged ~53 per game compared to PPO_25's ~36 and PPO_27's ~23.5. PPO_27's average is completely stable at 23.5 across 9,000+ games — it is not converging upward with more samples, confirming this is its true single-env floor rather than an artifact of small sample size.
+**PPO_26 still beats PPO_25 on every single-env metric** — that finding holds. But the PPO_27 column tells a different and important story.
 
-**Note on the apparent tension with the eval-score finding above:** This single-env watch data was captured at an earlier point in PPO_27's training (snapshot, not continuously updated). PPO_27's eval/mean_reward metric (averaged across 50 parallel eval episodes) has since climbed to a new all-time high, but that doesn't necessarily mean its single-env funnel rate or single-env average has improved proportionally — those would need to be re-measured against PPO_27's current best_model to know for sure. **This re-measurement is recommended as a first step before designing Experiment 2** (see below).
+**Critical correction — PPO_27 did NOT inherit PPO_26's zero-score elimination.** PPO_27's zero-score rate (21.3%) is actually *worse* than PPO_25's (20.0%) — a higher failure rate than the no-sticky baseline. This definitively disproves the earlier hypothesis that "sticky actions eliminate the zero-score failure mode." Sticky actions alone do not fix it. The zero-score elimination in PPO_26 required a combination of factors: a deep non-sticky foundation (838M steps from PPO_25) *followed by* sticky-action refinement (~1B steps). PPO_27, trained entirely with sticky from scratch, lacks that foundation and performs the worst in single-env play.
 
-**The gap between PPO_26 (~53) and PPO_27 (~23.5) is substantial and consistent — roughly 2x** as of the last single-env measurement. This appears to be the sticky action penalty in full effect on a model trained exclusively with them from scratch. PPO_26, having inherited a billion steps of non-sticky training before switching regimes, retained enough of that baseline competence to score significantly higher in clean single-env play — at least as of that snapshot.
+**PPO_27's single-env story: highest eval (147.02), worst actual gameplay (avg 27.9, 21.3% zero-score).** The eval/single-env gap has never been wider. This strongly suggests fresh sticky-from-scratch training produces a policy that performs well under parallel eval sampling but collapses on sequential single-env execution — the opposite of what was hoped for.
 
-**The funnel rate ordering (as of that snapshot) is consistent with the sticky action penalty hypothesis.** PPO_25 (no sticky, clean execution) had the highest funnel rate at 2.2%, PPO_26 sat in the middle at 1.8%, and PPO_27 had the lowest at 0.8%. Sticky actions make funnel completion harder — the tunnel strategy requires precise sustained ball tracking, and a randomly repeated action during the critical phase can lose the ball before it racks up significant points.
+**PPO_26 remains the clear single-env leader across all three runs** — highest average, highest median, highest floor, highest funnel rate, and the only model with zero zero-score games. Its recipe (~838M non-sticky + ~1B sticky) is the proven formula for actual gameplay quality.
 
-**These results should be interpreted cautiously.** All three models were evaluated against best_model saves recorded at different training stages, and PPO_27 in particular has progressed substantially since its single-env snapshot was taken. A fully controlled comparison would require evaluating all three at identical step counts with identical environment configurations, ideally re-run against current best_model checkpoints.
+---
+
+### Investigation: The "Quick Death" Cluster and Direction-Correctness (Side Investigation)
+
+Following up on PPO_26's much milder version of the zero-score pattern (no literal zeros, but a real cluster of very-low-score games with short, similar frame counts), a hunting script (`watch_quickdeath_ppo26.py`) was built to specifically capture games matching that signature, with per-frame RAM tracing (paddle x, ball x, ball y) and the raw action chosen each frame.
+
+**Methodology note — RAM coordinate convention correction.** Initial analysis assumed `paddle_x`/`ball_x` of 0 and 191 meant "left wall" and "right wall" respectively. Empirical testing across the captured traces showed this was backwards relative to the action labels: `LEFT` consistently increases `paddle_x` (139 increases vs. 11 decreases across the sample) and `RIGHT` consistently decreases it. This doesn't indicate a bug — it just means the RAM convention runs opposite to naive intuition, and all directional analysis was corrected to account for it.
+
+**Hypothesis tested:** that quick-death games show the paddle choosing the geometrically wrong direction (relative to the ball) more often than ordinary play — i.e., a "panic" effect.
+
+**Result: not supported.** A direction-correctness metric (does the chosen LEFT/RIGHT action move the paddle toward the ball, given its pre-action position) was computed for the 6 captured quick-death games and for 40 unfiltered control games (`watch_controltrace_ppo26.py`):
+
+| Sample | Direction-correct rate |
+|--------|------------------------|
+| Quick-death cluster (6 games) | 61.3% |
+| Control — unfiltered (40 games) | 55.3% |
+| Control — low score (<20 pts) | 57.1% |
+| Control — mid score (20-49 pts) | 55.0% |
+| Control — high score (50+ pts) | 55.2% |
+
+Direction-correctness sits flat around 55% regardless of how well the game went, and the quick-death cluster actually scored *higher* on this metric than the control baseline — the opposite of the panic hypothesis. A velocity-aware version of the metric (predicting where the ball is heading rather than just its current position) was also tested and produced essentially the same result (54.6%), ruling out "the metric ignores velocity" as the explanation.
+
+**Conclusion:** this specific diagnostic is inconclusive and not worth refining further. Whatever causes the milder quick-death cluster in PPO_26, it isn't captured by frame-level instantaneous direction-correctness. Given that PPO_26's actual headline result (zero zero-score games, better-than-PPO_25 on every other axis) is already a strong, settled finding independent of this investigation, this thread is closed for now rather than pursued further.
+
+**Open question raised during this investigation, not yet tested:** would disabling sticky actions (`repeat_action_probability=0.0`) after training with them on for a substantial period improve precision without reintroducing the original positional-memorization problem? This is genuinely untestable from existing data — it requires running the experiment. It maps directly onto **Option B** in the Planned Next Steps below, and this investigation is a (weak, inconclusive) point in favor of trying it, since execution noise from sticky actions remains a plausible contributor to imprecision even though we couldn't isolate it cleanly here.
 
 ---
 
 ### Conclusions
 
-**1. Inherited weights with sticky actions show diminishing returns.**
-PPO_26 recovered quickly early on (reaching 80+ in 22M steps) but this advantage eroded over training. The billion steps of non-sticky-action experience created deeply ingrained positional habits that were slow to overwrite. By 300M steps the advantage was essentially gone, and by the latest batch PPO_26 trails PPO_27 in both peak and average eval score.
+**1. Inherited weights with sticky actions show diminishing returns on eval score, but the single-env story is more positive than that.**
+PPO_26 recovered quickly early on (reaching 80+ in 22M steps) but this eval-score advantage eroded over training, and PPO_27 went on to set the all-time eval record. However, on single-env matched-script testing, PPO_26 is unambiguously the stronger model of the two trained so far — higher average, higher median, higher floor, more funnels, and a fully eliminated zero-score blind spot. Eval score and single-env score are not telling the same story here, which is itself a useful reminder (see RL_REFERENCE.md Lesson #13).
 
-**2. Fresh training with sticky actions is more sample efficient for high performance — and now holds the outright record.**
-PPO_27 broke 100 at 299M steps — nearly the same as PPO_26's 304M — despite starting from random weights. As of the latest evals, PPO_27 has gone on to set the new all-time eval record (143.36), surpassing both PPO_26 and the original PPO_25 baseline. **This resolves the open question from earlier in this experiment:** for reaching the highest performance tier, starting fresh with the correct environment configuration is now confirmed to outperform inheriting a billion steps of prior (mismatched) training, at least at current step counts.
+**2. Fresh training with sticky actions is more sample efficient for high performance — and now holds the outright eval record.**
+PPO_27 broke 100 at 299M steps — nearly the same as PPO_26's 304M — despite starting from random weights. As of the latest evals, PPO_27 has gone on to set the new all-time eval record (147.02), surpassing both PPO_26 and the original PPO_25 baseline. **This resolves the open question from earlier in this experiment:** for reaching the highest performance tier, starting fresh with the correct environment configuration is now confirmed to outperform inheriting a billion steps of prior (mismatched) training, at least on eval score.
 
-**3. Sticky actions produce more stable training dynamics.**
-PPO_27 showed consistently lower KL divergence, tighter eval oscillation, and more predictable improvement curves. PPO_26's wider swings — including its most recent batch ending on a downward note after a fresh peak — suggest the policy may still be overwriting older habits rather than building cleanly on a stable foundation, even this far into training.
+**3. Sticky actions alone do not eliminate the zero-score failure mode.**
+PPO_27 (fresh + sticky, 867M steps) has a 21.3% zero-score rate — *worse* than PPO_25's 20.0% no-sticky baseline. The earlier conclusion that "sticky actions eliminate zero-score games" was based on PPO_26's result, which combined a deep non-sticky foundation (838M steps from PPO_25) with sticky refinement (~1B steps). PPO_27 definitively rules out the "sticky-only" explanation.
 
-**4. Sticky actions improve general play consistency but reduce tunnel exploitation rate — though this needs re-confirmation against current models.**
-As of the original snapshot, PPO_26 achieved the highest single-env average score (~52) of the three models, suggesting sticky-action training does improve robust ball tracking, and all sticky-action models showed lower funnel completion rates than PPO_25. This tradeoff is plausible and consistent with the precision-vs-robustness tradeoff sticky actions are expected to introduce. However, given how much PPO_27's eval scores have since moved, this finding is now **stale relative to PPO_27's current best_model** and should be re-measured (see Recommended Next Step below).
+**4. SUPERSEDED — Sticky actions do not trade funnel rate for general consistency; PPO_26 wins on both.**
+*(Original conclusion, kept for the record: "Sticky-action training improves general play consistency but reduces tunnel exploitation rate." This was based on a small, inconsistently-thresholded snapshot and is now contradicted by the full matched-script data above — PPO_26 has both a higher single-env average AND a higher funnel rate than PPO_25. There is no funnel-rate cost to sticky actions in this comparison.)*
 
-**5. Peak eval scores now favor PPO_27 outright — the open question from the original writeup is resolved.**
-The original conclusion noted PPO_26 held the higher peak (113.62 vs 103.82) but that PPO_27 was younger and still climbing, leaving open whether it would surpass PPO_26. **It has** — PPO_27's 143.36 now exceeds PPO_26's 134.16, and exceeds the original all-time baseline set by PPO_25 (140.94). PPO_27 is the new champion on every score-based metric tracked in this experiment except single-env funnel rate (as last measured).
+**5. Peak eval scores favor PPO_27; single-env quality favors PPO_26 — resolved, PPO_27 does NOT catch up.**
+PPO_27 holds the eval-score record outright (147.02). But on single-env sequential play, PPO_27 is the **worst** of the three models tested — avg 27.9 (vs PPO_26's 54.3, PPO_25's 34.6), zero-score rate 21.3% (vs PPO_26's 0%, PPO_25's 20.0%). The eval leader is not the best model for actual gameplay. This gap is now measured and confirmed at full 10,000-game sample size.
+
+**6. The proven recipe for single-env quality: deep non-sticky foundation → sticky refinement.**
+PPO_26's ~838M non-sticky + ~1B sticky steps produced better results than both PPO_25 (all non-sticky) and PPO_27 (all sticky) across every single-env metric. This strongly suggests sticky actions work best as a refinement layer applied to an already-competent policy, not as a primary training regime.
 
 ---
 
-### Recommended Next Step (before designing Experiment 2)
+### Status
 
-Given how much PPO_27 has moved since the single-env watch snapshot was taken, re-run `ad_hoc_eval.py` or `funnel_recorder.py` against **PPO_27's current best_model** (and PPO_26's, for a fair comparison) before committing to a new experiment design. The current single-env numbers (~23.5 avg, 0.8% funnel rate for PPO_27) may no longer reflect its actual current behavior now that its eval score has overtaken everyone else's.
+**Done:** PPO_25, PPO_26, and PPO_27 full 10,000-game matched-script funnel runs. Quick-death investigation (inconclusive, closed). All three-way single-env comparison data collected and analyzed.
+**Pending:** PPO_28 and PPO_29 — the two-phase "remove sticky" experiments, testing whether disabling sticky actions after deep sticky training recovers funnel precision while preserving zero-score immunity.
 
 ---
 
@@ -134,12 +165,14 @@ This is not a perfectly controlled experiment. Confounding variables include:
 - **Environment count:** PPO_26 used 64 envs, PPO_27 used 32. This affects both training dynamics and the effective batch size despite batch_size being scaled proportionally.
 - **Starting point:** PPO_26 inherited not just PPO_25's weights but also its optimizer state and learning rate schedule, which were reset. The schedule restart may have affected early training dynamics.
 - **Hardware sharing:** Both runs trained simultaneously on the same GPU, with each receiving roughly half the available compute. Neither was running at full speed.
-- **System restarts:** Multiple unplanned interruptions throughout both runs may have affected continuity.
-- **Stale single-env data:** The single-env watch comparison table above was captured at one point in time and has not been refreshed against current best_model checkpoints, despite eval scores moving substantially since then.
+- **System restarts:** Multiple unplanned interruptions throughout both runs may have affected continuity, including a recurring bug (now fixed) where `total_timesteps` was being treated as "train N more steps" on every restart rather than an absolute target.
+- **Small quick-death sample:** The direction-correctness investigation above used only 6 quick-death games against 40 control games — both are small samples, and the inconclusive result could simply reflect insufficient data rather than a genuinely flat relationship.
 
-Despite these limitations, the directional conclusions on training stability and overall eval performance are consistent across multiple metrics and observation methods.
+Despite these limitations, the directional conclusions on training stability and single-env quality are consistent across multiple metrics and observation methods.
 
 ---
+
+
 
 ## Option D (Considered and Rejected): Process-Based Reward via Paddle Bounces + Episode Length
 
@@ -154,26 +187,29 @@ Raised as an alternative to score-based reward, on the reasoning that human skil
 
 ---
 
-## Planned Next Steps (as of latest session)
+## Planned Next Steps — PPO_28 and PPO_29
 
-**Trigger:** once PPO_26 and PPO_27 each reach 1 billion total steps.
+**Trigger:** All three prior runs (PPO_25, PPO_26, PPO_27) have complete 10,000-game single-env funnel baselines. The three-way comparison is settled: PPO_26 (non-sticky foundation → sticky refinement) is the clear single-env leader; PPO_27 (all-sticky from scratch) is the worst.
 
-**Step 1 — Refresh the funnel/score baseline.** Run `funnel_recorder.py` (or `ad_hoc_eval.py`) against the current `best_model` checkpoint for both PPO_26 and PPO_27, capped at **10,000 games each**. This replaces the stale single-env comparison table in Experiment 1 (captured at an earlier, lower-performing snapshot of PPO_27) with numbers that reflect each agent's actual current behavior — average score, best score, and funnel rate (200+ pts). Re-running against PPO_25's existing best_model as a control, if not already at 10,000 games, would also be worth doing for a clean three-way comparison at matched sample size.
+**Open question:** Would disabling sticky actions after deep sticky training improve precision (funnel rate) without sacrificing the zero-score immunity or average score gains? Two experiments answer this in parallel:
 
-**Step 2 — Pick one "free" experiment to run alongside/after the refresh.** "Free" here means: no new training run, no new reward design, no new Goodhart risk — just analysis of data and models that already exist. Ranked by cost and expected value:
+| Run | Base Model | Total Steps Before | Intervention | Target |
+|-----|-----------|-------------------|--------------|--------|
+| **PPO_28** | PPO_26 best_model | 838M non-sticky + ~1B sticky | Remove sticky (`repeat_action_probability=0.0`) | +500M steps |
+| **PPO_29** | PPO_27 best_model | ~867M sticky (from scratch) | Remove sticky (`repeat_action_probability=0.0`) | +500M steps |
 
-| # | Investigation | Cost | What it would tell us |
-|---|---------------|------|------------------------|
-| 1 | Diagnose PPO_26's recent downward-ending batch (134.16 → 71.50) using TensorBoard (`approx_kl`, `entropy_loss`, `value_loss`) for that step range | Free — log analysis only | Whether PPO_26 is in a real regression or normal oscillation; informs whether it's worth continuing past 1B steps as-is |
-| 2 | Verify whether sticky actions actually fixed the original "dead ball" problem (agent ignoring the ball after losing a life) — qualitative pass with `watch.py` | Free — observation only | Closes the loop on one of the two original motivations for Experiment 1, which has only been inferred from aggregate scores so far, never directly checked |
-| 3 | Sticky-action intensity sweep (`repeat_action_probability` at 0.05/0.10/0.15 vs the current 0.25) | Low — short branch runs, no new reward design | Maps the actual stability-vs-funnel-rate tradeoff curve instead of assuming it's linear; could reveal a sweet spot that keeps most of the stability gain while recovering funnel rate |
-| 4 | Revisit `net=[512,512]` at current training durations | Medium — full run needed to be conclusive | Whether "bigger nets underperform" (established at <25M steps, PPO_8–11) still holds at 1B+ step scale, or was a training-duration artifact |
+Both use the corrected continuation pattern (`remaining = TARGET - model.num_timesteps`), dedicated training scripts (`train_ppo28.py` / `train_ppo29.py`), 32 envs each (sharing GPU), and eval at matched intervals.
 
-Items 1 and 2 are pure analysis of existing data/checkpoints and cost nothing to run — good candidates to pad out this report before committing to anything that requires new compute. Item 3 is the most direct lever on the actual open problem (funnel rate under sticky actions) and the natural next real experiment if 1 and 2 don't change the picture. Item 4 is lower priority — flagged for later, not for this round.
+### What this pairing reveals
 
-**Deferred:** the funnel-commitment reward-shaping idea (originally "Option C") stays on the shelf until the above is done — it carries the most Goodhart risk of any option discussed, and the sweep in item 3 may make it unnecessary.
+| Outcome | Meaning |
+|---------|---------|
+| PPO_28 recovers funnel rate, keeps zero-score elimination | Two-phase (non-sticky → sticky → no-sticky) works; sticky can be safely removed after refinement |
+| PPO_29 also recovers zero-score, improves average | Sticky-from-scratch was masking underlying competence — removal reveals it |
+| PPO_29 stays high zero-score, low average | The damage from all-sticky training is structural, not just execution noise |
+| Neither recovers funnel | Sticky permanently suppresses funnel precision regardless of training history |
 
-*Whichever of items 1-4 gets picked, the results should be added back into this doc — and per the plan, may well surface new questions worth tracking here too.*
+**Deferred:** sticky-action intensity sweep, `net=[512,512]` revisit, and funnel-commitment reward shaping — any of these may become relevant depending on PPO_28/29 outcomes.
 
 ---
 
