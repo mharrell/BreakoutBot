@@ -14,14 +14,14 @@ from stable_baselines3.common.vec_env import VecFrameStack
 gym.register_envs(ale_py)
 
 # --- Run-specific config ---
-RUN_NAME = "PPO_27"
-STICKY_ACTIONS = True  # must match this run's training env config
+RUN_NAME = "PPO_25"
+STICKY_ACTIONS = False  # must match this run's training env config
 MODEL_PATH = f"../models/{RUN_NAME}/best_model"
 
 # --- Measurement config ---
 FUNNEL_THRESHOLD = 400          # lowered from 500 per latest review (was missing some real funnel runs)
 NUM_GAMES = 10000                # hard cap — script stops on its own, no manual kill needed
-OUTPUT_DIR = "../recordings"
+OUTPUT_DIR = "../../recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60
 SLOW_FACTOR = 0.5                # 0.5 = half speed, 0.25 = quarter speed

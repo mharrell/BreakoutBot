@@ -14,17 +14,17 @@ from stable_baselines3.common.vec_env import VecFrameStack
 gym.register_envs(ale_py)
 
 # --- Run-specific config ---
-RUN_NAME = "PPO_28"
-STICKY_ACTIONS = False  # no sticky — this run's intervention
+RUN_NAME = "PPO_26"
+STICKY_ACTIONS = True  # must match this run's training env config
 MODEL_PATH = f"../models/{RUN_NAME}/best_model"
 
 # --- Measurement config ---
-FUNNEL_THRESHOLD = 400
-NUM_GAMES = 10000
-OUTPUT_DIR = "../recordings"
+FUNNEL_THRESHOLD = 400          # lowered from 500 per latest review (was missing some real funnel runs)
+NUM_GAMES = 10000                # hard cap — script stops on its own, no manual kill needed
+OUTPUT_DIR = "../../recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60
-SLOW_FACTOR = 0.5
+SLOW_FACTOR = 0.5                # 0.5 = half speed, 0.25 = quarter speed
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -46,6 +46,9 @@ def get_frame(env):
 
 
 def write_video(frames, path):
+    """Writes a buffered list of frames to disk in one shot.
+    Only called for games that clear the funnel threshold, so the vast
+    majority of the 10,000 games never touch disk for video at all."""
     if not frames:
         return
     h, w = frames[0].shape[:2]
@@ -56,6 +59,7 @@ def write_video(frames, path):
 
 
 def slow_down_video(input_path, factor=0.5):
+    """Re-encode video at slower playback speed using ffmpeg."""
     slow_path = input_path.replace(".mp4", "_slow.mp4")
     result = subprocess.run([
         "ffmpeg", "-i", input_path,
@@ -107,6 +111,8 @@ while episode <= NUM_GAMES:
             agent_fps = game_frames / elapsed if elapsed > 0 else 60
             expected_duration = game_frames / PLAYBACK_FPS
 
+            # Only funnel games get written to disk — frame_buffer is discarded
+            # otherwise, which is what keeps this fast across 10,000 games.
             is_funnel = real_score >= FUNNEL_THRESHOLD
             if is_funnel:
                 funnel_count += 1
@@ -118,6 +124,8 @@ while episode <= NUM_GAMES:
                 slow_path = slow_down_video(save_path, factor=SLOW_FACTOR)
                 if slow_path:
                     print(f"*** SLOW VERSION: {slow_path} ({expected_duration / SLOW_FACTOR:.1f}s) ***")
+                # No early shutdown on 600+ — every funnel in the full 10,000-game
+                # sample is wanted this time, not just the first big one.
 
             funnel_rate = f"{funnel_count}/{episode} ({100*funnel_count/episode:.1f}%)"
             print(f"Game {episode:>5} | Score: {real_score:>6.0f} | Avg: {avg:>6.1f} | "
