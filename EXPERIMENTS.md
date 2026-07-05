@@ -367,11 +367,40 @@ PPO_30a and PPO_31a run simultaneously (Phase 1 in parallel). PPO_30b starts as 
 
 ### Results
 
-*Pending. PPO_30a and PPO_31a currently in Phase 1 training.*
+**Tooling note:** a `MemorizationCheckCallback` (see `memorization_check_callback.py`) was added to all four training scripts after this experiment began. It runs a 20-game in-memory check every 10M steps and appends to `{RUN_NAME}_memorization_track.csv`, so the trajectory is now visible incrementally rather than only at manual check-in points. PPO_30a and PPO_31a were restarted (from checkpoint, no progress lost) to pick up the callback.
 
-**What to watch for:**
+#### Phase 1 — Early Memorization, Both Runs (confirmed, then tracked)
 
-When Phase 2 (sticky) begins for each run, the key early warning sign from Experiment 2 was `ep_rew_mean` doubling or tripling within the first 10-30M steps while `explained_variance` → 1.0 and `value_loss` → ~0. If either PPO_30b or PPO_31b shows this pattern, it should be verified behaviorally immediately (run `diagnostic_ppo28.py` pattern against the checkpoint) rather than waiting for the full run to complete.
+A manual check at ~11M steps (before the automated callback existed) found both PPO_30a and PPO_31a already collapsed to 1-2 repeated scores — concerning, since this happens in runs with sticky actions never having been present, unlike PPO_28/29 which collapsed *after* stickiness was removed from an already-trained policy. This raised the open question of whether non-sticky Breakout training reliably finds a fixed-script local optimum almost immediately and needs a long runway to escape it (possibly explaining why PPO_25 needed close to a billion steps to show real variance).
+
+Automated tracking since then:
+
+| Run | Step | Unique Scores | Avg | Best | Worst | Verdict |
+|-----|------|---------------|-----|------|-------|---------|
+| PPO_30a | 10,000,000 | 1 | 40.0 | 40.0 | 40.0 | MEMORIZED |
+| PPO_30a | 20,000,000 | 2 | 40.2 | 44.0 | 40.0 | MEMORIZED |
+| PPO_30a | 30,000,000 | 2 | 9.9 | 27.0 | 9.0 | MEMORIZED |
+| PPO_30a | 40,000,000 | 1 | 27.0 | 27.0 | 27.0 | MEMORIZED |
+| PPO_30a | 50,000,000 | 2 | 5.2 | 27.0 | 4.0 | MEMORIZED |
+| PPO_30a | 60,000,000 | 2 | 98.2 | 102.0 | 98.0 | MEMORIZED |
+| PPO_30a | 70,000,000 | 2 | 39.4 | 40.0 | 27.0 | MEMORIZED |
+| PPO_30a | 80,000,000 | 2 | 9.6 | 40.0 | 8.0 | MEMORIZED |
+| PPO_30a | 90,000,000 | 2 | 7.0 | 27.0 | 6.0 | MEMORIZED |
+| PPO_30a | 100,000,000 ✅ | 2 | 98.9 | 102.0 | 40.0 | MEMORIZED |
+| PPO_31a | 10,000,000 | 2 | 8.9 | 64.0 | 6.0 | MEMORIZED |
+| PPO_31a | 20,000,000 | 2 | 10.4 | 76.0 | 7.0 | MEMORIZED |
+| PPO_31a | 30,000,000 | 2 | 61.7 | 64.0 | 18.0 | MEMORIZED |
+| PPO_31a | 40,000,000 | 2 | 3.8 | 18.0 | 3.0 | MEMORIZED |
+| PPO_31a | 50,000,000 | 1 | 78.0 | 78.0 | 78.0 | MEMORIZED |
+| PPO_31a | 60,000,000 | 1 | 64.0 | 64.0 | 64.0 | MEMORIZED |
+| PPO_31a | 70,000,000 | 2 | 8.9 | 64.0 | 6.0 | MEMORIZED |
+| PPO_31a | 80,000,000 | 1 | 64.0 | 64.0 | 64.0 | MEMORIZED |
+| PPO_31a | 90,000,000 | 1 | 106.0 | 106.0 | 106.0 | MEMORIZED |
+| PPO_31a | 100,000,000 | 2 | 20.6 | 31.0 | 20.0 | MEMORIZED |
+
+**PPO_30a Phase 1 COMPLETE at 100,002,816 steps.** The cycling pattern came full circle — the policy returned to its 102-point peak script right at the finish line (avg=98.9, best=102), after spending steps 65M-95M in crash/trough phases. Rollout at completion: ep_rew_mean=67-70, LR=1e-05, approx_kl=8e-6, clip_fraction=0.000183 — completely frozen. `best_model.zip` captures the 98-102 point quality. **PPO_30b launched from `PPO_30a/best_model`.**
+
+**What to watch for in Phase 2:** when each run transitions to sticky actions (PPO_30b, PPO_31b), the key early warning sign from Experiment 2 was `ep_rew_mean` doubling or tripling within the first 10-30M steps while `explained_variance` → 1.0 and `value_loss` → ~0. The automated `MemorizationCheckCallback` is wired into both Phase 2 scripts with `sticky_actions=True`, so this should now surface automatically in the tracking CSVs rather than requiring a manual check.
 
 **Predicted outcome table** (to be confirmed by data):
 
@@ -386,7 +415,9 @@ When Phase 2 (sticky) begins for each run, the key early warning sign from Exper
 
 ### Status
 
-**IN PROGRESS.** PPO_30a (100M non-sticky) and PPO_31a (400M non-sticky) running simultaneously. PPO_30b and PPO_31b will start once their respective Phase 1 runs complete.
+**PPO_31a at 100M: crashed from 106 → avg=20.6, best=31.** Same cycle pattern — 106-point script overwritten at ~100M. Rollout at 106M shows ep_rew_mean=121-137 and *rising*, recovery already underway with real value_loss and KL. Cycle peaks across the full run: 40→44→76→78→106 — each major cycle ~35% higher than the last. Next peak expected to exceed 106. Still 300M steps remaining.
+
+**IN PROGRESS.** PPO_30a Phase 1 complete. **PPO_30b launched** (Phase 2, sticky on, from PPO_30a best_model). PPO_31a Phase 1 continuing (100M of 400M, crashed from 106-point peak, recovering). PPO_31b will launch once PPO_31a completes at 400M.
 
 ---
 

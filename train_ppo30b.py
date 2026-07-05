@@ -14,6 +14,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_atari_env
 from stable_baselines3.common.vec_env import VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
+from memorization_check_callback import MemorizationCheckCallback
 
 gym.register_envs(ale_py)
 
@@ -61,7 +62,20 @@ checkpoint_callback = CheckpointCallback(
     verbose=1,
 )
 
-callbacks = CallbackList([eval_callback, checkpoint_callback])
+# Periodic in-memory check for behavioral collapse to a fixed action
+# sequence. sticky_actions=True here matches this script's Phase 2 config —
+# important for this run specifically: this is exactly the phase transition
+# where PPO_28/29 collapsed (going the other direction, sticky-to-off), so
+# confirming this phase maintains or restores variance is the central
+# question Experiment 3 is testing.
+memorization_callback = MemorizationCheckCallback(
+    run_name=RUN_NAME,
+    sticky_actions=True,
+    check_freq=10_000_000,
+    n_games=20,
+)
+
+callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback])
 
 resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 

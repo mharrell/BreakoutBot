@@ -25,11 +25,11 @@ gym.register_envs(ale_py)
 
 RUN_NAME = "PPO_31b"
 STICKY_ACTIONS = True
-MODEL_PATH = f"../models/{RUN_NAME}/best_model"
+MODEL_PATH = f"models/{RUN_NAME}/best_model"
 
 FUNNEL_THRESHOLD = 400
 NUM_GAMES = 10000
-OUTPUT_DIR = "../recordings"
+OUTPUT_DIR = "recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60
 SLOW_FACTOR = 0.5

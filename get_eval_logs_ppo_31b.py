@@ -3,7 +3,7 @@ import os
 
 RUN_NAME = "PPO_31b"
 
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.abspath(__file__))
 log_path = os.path.join(project_root, "logs", RUN_NAME, "evaluations.npz")
 
 print("Looking for:", log_path)
