@@ -1,7 +1,9 @@
 """
 PPO_31b — Phase 2 of Experiment 3 (sticky-action fine-tuning)
-Loads PPO_31a's final_model and trains for 300M more steps WITH sticky actions.
+Loads PPO_31a's final_model and trains for 100M more steps WITH sticky actions.
 LR schedule starts mid-range (1e-4 → 1e-5) — same conservative choice as PPO_30b.
+
+Total: 300M non-sticky + 100M sticky = 400M total (matching PPO_30's 400M cap).
 
 Run AFTER train_ppo31a.py has completed.
 """
@@ -14,12 +16,14 @@ from stable_baselines3.common.env_util import make_atari_env
 from stable_baselines3.common.vec_env import VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 from memorization_check_callback import MemorizationCheckCallback
+from brick_counter import BrickCountingVecWrapper, BrickRolloutCallback
 
 gym.register_envs(ale_py)
 
 RUN_NAME = "PPO_31b"
 SOURCE_MODEL = "./models/PPO_31a/final_model"
-ADDITIONAL_STEPS = 300_000_000
+ADDITIONAL_STEPS = 100_000_000
+ABSOLUTE_TARGET = 400_000_000  # 300M non-sticky + 100M sticky
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 def linear_schedule(start: float, end: float):
@@ -37,6 +41,7 @@ def get_latest_checkpoint(path):
 env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=None,
                      env_kwargs={"repeat_action_probability": 0.25})
 env = VecFrameStack(env, n_stack=4)
+env = BrickCountingVecWrapper(env)
 
 eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
                           env_kwargs={"repeat_action_probability": 0.25})
@@ -72,9 +77,15 @@ memorization_callback = MemorizationCheckCallback(
     sticky_actions=True,
     check_freq=10_000_000,
     n_games=20,
+    summary_lines=[
+        "PPO_31b — Phase 2 of Experiment 3 (sticky after long pretraining)",
+        "Sticky on, 32 envs, loaded from PPO_31a/final_model, target 400M total (100M sticky)",
+        "LR 1e-4→1e-5, clip 0.15→0.05, ent_coef=0.006, batch_size=1024",
+        "Tests hypothesis B: does 300M non-sticky pretraining beat 100M?",
+    ],
 )
 
-callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback])
+callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, BrickRolloutCallback()])
 
 resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
@@ -103,10 +114,9 @@ else:
     reset_num_timesteps = False  # preserve step count from Phase 1
 
 # Absolute step target — safe across restarts
-TARGET_STEPS = model.num_timesteps + ADDITIONAL_STEPS
-remaining = TARGET_STEPS - model.num_timesteps
+remaining = ABSOLUTE_TARGET - model.num_timesteps
 print(f"{RUN_NAME}: current step {model.num_timesteps:,}, "
-      f"training {remaining:,} more steps to reach {TARGET_STEPS:,}")
+      f"training {remaining:,} more steps to reach {ABSOLUTE_TARGET:,}")
 
 model.learn(
     total_timesteps=remaining,

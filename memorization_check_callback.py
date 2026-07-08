@@ -40,7 +40,7 @@ gym.register_envs(ale_py)
 class MemorizationCheckCallback(BaseCallback):
     def __init__(self, run_name, sticky_actions, check_freq=10_000_000,
                  n_games=20, output_dir="./recordings",
-                 max_check_steps=200_000, verbose=1):
+                 max_check_steps=200_000, verbose=1, summary_lines=None):
         super().__init__(verbose)
         self.run_name = run_name
         self.sticky_actions = sticky_actions
@@ -48,6 +48,7 @@ class MemorizationCheckCallback(BaseCallback):
         self.n_games = n_games
         self.output_dir = output_dir
         self.max_check_steps = max_check_steps  # safety cap, avoids hangs
+        self.summary_lines = summary_lines or []
         self.last_check_step = 0
         self.track_log_path = os.path.join(
             output_dir, f"{run_name}_memorization_track.csv"
@@ -59,6 +60,8 @@ class MemorizationCheckCallback(BaseCallback):
         self.track_log_file = open(self.track_log_path, "a", newline="")
         self.track_log_writer = csv.writer(self.track_log_file)
         if is_new:
+            for line in self.summary_lines:
+                self.track_log_file.write(f"# {line}\n")
             self.track_log_writer.writerow([
                 "check_timestamp", "training_step", "games_played",
                 "unique_scores", "avg_score", "best_score",

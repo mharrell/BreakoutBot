@@ -70,6 +70,12 @@ memorization_callback = MemorizationCheckCallback(
     sticky_actions=False,
     check_freq=10_000_000,
     n_games=20,
+    summary_lines=[
+        "PPO_30a — Phase 1 of Experiment 3 (short non-sticky pretraining)",
+        "Non-sticky, 32 envs, fresh agent, target 100M steps",
+        "LR 2.5e-4→1e-5, clip 0.2→0.05, ent_coef=0.006, batch_size=1024",
+        "Phase 2: PPO_30b adds sticky actions (300M more steps)",
+    ],
 )
 
 callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback])

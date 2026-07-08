@@ -15,12 +15,14 @@ from stable_baselines3.common.env_util import make_atari_env
 from stable_baselines3.common.vec_env import VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 from memorization_check_callback import MemorizationCheckCallback
+from brick_counter import BrickCountingVecWrapper, BrickRolloutCallback
 
 gym.register_envs(ale_py)
 
 RUN_NAME = "PPO_30b"
 SOURCE_MODEL = "./models/PPO_30a/final_model"
 ADDITIONAL_STEPS = 300_000_000
+ABSOLUTE_TARGET = 400_000_000  # fixed target, safe across restarts
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 def linear_schedule(start: float, end: float):
@@ -38,6 +40,7 @@ def get_latest_checkpoint(path):
 env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=None,
                      env_kwargs={"repeat_action_probability": 0.25})
 env = VecFrameStack(env, n_stack=4)
+env = BrickCountingVecWrapper(env)
 
 eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
                           env_kwargs={"repeat_action_probability": 0.25})
@@ -73,9 +76,15 @@ memorization_callback = MemorizationCheckCallback(
     sticky_actions=True,
     check_freq=10_000_000,
     n_games=20,
+    summary_lines=[
+        "PPO_30b — Phase 2 of Experiment 3 (sticky after short pretraining)",
+        "Sticky on, 32 envs, loaded from PPO_30a/final_model, target 400M total (300M sticky)",
+        "LR 1e-4→1e-5, clip 0.15→0.05, ent_coef=0.006, batch_size=1024",
+        "Tests hypothesis A: is 100M non-sticky pretraining enough?",
+    ],
 )
 
-callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback])
+callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, BrickRolloutCallback()])
 
 resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
@@ -104,10 +113,9 @@ else:
     reset_num_timesteps = False  # preserve step count from Phase 1
 
 # Absolute step target — safe across restarts
-TARGET_STEPS = model.num_timesteps + ADDITIONAL_STEPS
-remaining = TARGET_STEPS - model.num_timesteps
+remaining = ABSOLUTE_TARGET - model.num_timesteps
 print(f"{RUN_NAME}: current step {model.num_timesteps:,}, "
-      f"training {remaining:,} more steps to reach {TARGET_STEPS:,}")
+      f"training {remaining:,} more steps to reach {ABSOLUTE_TARGET:,}")
 
 model.learn(
     total_timesteps=remaining,

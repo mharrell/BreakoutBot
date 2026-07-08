@@ -1,5 +1,12 @@
 # Experiments
 
+**SUMMARY — Three experiments testing sticky actions in Breakout RL:**
+- **Experiment 1 (COMPLETE):** PPO_25 (no sticky) vs PPO_26 (deep pretraining + sticky) vs PPO_27 (fresh + sticky). **Finding:** sticky actions alone don't fix the zero-score blind spot — PPO_26 (deep foundation + sticky) eliminated zero-score (0.0%), PPO_27 (fresh + sticky) matched PPO_25's 20%. Eval score and single-env rankings are inverted — PPO_27 holds the eval record (147.02) but is the worst single-env model on every metric. **Central conclusion:** needs both ingredients — deep non-sticky pretraining AND sticky actions permanently.
+- **Experiment 2 (COMPLETE):** PPO_28/29 — removed sticky actions from trained models. **Finding:** both collapsed to fixed open-loop action sequences within ~30M steps. Training metrics (EV, value_loss, entropy) lied during collapse. Sticky actions are required at inference time, not just during training.
+- **Experiment 3 (IN PROGRESS):** PPO_30/31 — sweeping non-sticky pretraining duration before adding sticky. **PPO_30b: GENERALIZING at 200M/400M** 🏆 — first successful non-sticky→sticky transition in this project (100M sticky steps, zero relapses). Single-env avg flat at ~28-33 but generalization is real. **PPO_31a: MEMORIZED at 200M/300M** — still cycling through memorized scripts, same pattern since 10M. Key finding so far: 100M non-sticky pretraining was enough to break memorization. Open question: does 300M non-sticky (PPO_31b) produce a better model with only 100M sticky steps?
+
+**Current priority:** Experiment 3, item 6 (non-sticky pretraining duration sweep). See Planned Next Steps table at bottom of Experiment 1 section for full priority list.
+
 ## Experiment 1: Sticky Actions and Training Regime — PPO_26 vs PPO_27
 
 > **Status update — Experiment 1 COMPLETE.** PPO_26 finished at 1,001,828,352 total steps (eval peak 134.16 @ 905.6M). PPO_27 is still training and holds the all-time eval record (147.02 @ 867.2M). But the full 10,000-game single-env funnel comparison is now in for **all three models**, and it tells the opposite story from eval score: **PPO_26 wins every single-env metric; PPO_27 is the weakest single-env performer of the three**, with a zero-score rate (21.27%) statistically matching PPO_25's (20.0%) despite having sticky actions. See the updated Results and Conclusions below — this is the central finding of the experiment.
@@ -354,8 +361,10 @@ Both experiments use 32 parallel envs, two-phase structure, and a conservative L
 |-----|---------|---------|-------|
 | PPO_30a | 100M steps, no sticky, fresh agent | — | Non-sticky baseline at 100M |
 | PPO_30b | 300M steps, sticky on, loaded from PPO_30a | PPO_30a → PPO_30b | Hypothesis A — is 100M enough? |
-| PPO_31a | 400M steps, no sticky, fresh agent | — | Non-sticky baseline at 400M |
-| PPO_31b | 300M steps, sticky on, loaded from PPO_31a | PPO_31a → PPO_31b | Hypothesis B — does 400M work? |
+| PPO_31a | 300M steps, no sticky, fresh agent | — | Non-sticky baseline at 300M |
+| PPO_31b | 100M steps, sticky on, loaded from PPO_31a | PPO_31a → PPO_31b | Hypothesis B — does 300M beat 100M? |
+
+Both runs cap at 400M total steps.
 
 PPO_30a and PPO_31a run simultaneously (Phase 1 in parallel). PPO_30b starts as soon as PPO_30a completes (~4-8 hrs), without waiting for PPO_31a (~16-32 hrs).
 
@@ -397,8 +406,40 @@ Automated tracking since then:
 | PPO_31a | 80,000,000 | 1 | 64.0 | 64.0 | 64.0 | MEMORIZED |
 | PPO_31a | 90,000,000 | 1 | 106.0 | 106.0 | 106.0 | MEMORIZED |
 | PPO_31a | 100,000,000 | 2 | 20.6 | 31.0 | 20.0 | MEMORIZED |
+| PPO_31a | 110,000,000 | 2 | 18.5 | 28.0 | 18.0 | MEMORIZED |
+| PPO_31a | 120,000,000 | 2 | 8.8 | 25.0 | 8.0 | MEMORIZED |
+| PPO_31a | 130,000,000 | 2 | 23.7 | 132.0 | 18.0 | MEMORIZED |
+| PPO_31a | 140,000,000 | 2 | 77.8 | 81.0 | 18.0 | MEMORIZED |
+| PPO_31a | 150,000,000 | 1 | 63.0 | 63.0 | 63.0 | MEMORIZED |
+| PPO_31a | 160,000,000 | 1 | 23.0 | 23.0 | 23.0 | MEMORIZED |
+| PPO_31a | 170,000,000 | 1 | 64.0 | 64.0 | 64.0 | MEMORIZED |
+| PPO_31a | 180,000,000 | 2 | 39.9 | 41.0 | 18.0 | MEMORIZED |
+| PPO_31a | 190,000,000 | 2 | 26.6 | 27.0 | 18.0 | MEMORIZED |
+| PPO_31a | 200,000,000 | 2 | 21.1 | 81.0 | 18.0 | MEMORIZED |
+
+**PPO_31a Phase 1 at 200M (of 300M target):** The cycling pattern continues unchanged — 23→64→crash to 18→rebuild to 81→crash again. Each cycle finds a slightly better peak (132 at 130M, 81 at 200M) but immediately overwrites it. The policy still has zero generalization — every check except one at 130M shows only 1-2 unique scores. 100M non-sticky steps remaining before Phase 2.
 
 **PPO_30a Phase 1 COMPLETE at 100,002,816 steps.** The cycling pattern came full circle — the policy returned to its 102-point peak script right at the finish line (avg=98.9, best=102), after spending steps 65M-95M in crash/trough phases. Rollout at completion: ep_rew_mean=67-70, LR=1e-05, approx_kl=8e-6, clip_fraction=0.000183 — completely frozen. `best_model.zip` captures the 98-102 point quality. **PPO_30b launched from `PPO_30a/best_model`.**
+
+#### Phase 2 — Sticky Actions Added
+
+**PPO_30b memorization track (sticky on, target 400M total, LR restart at 1e-4→1e-5):**
+
+| Run | Step | Unique Scores | Avg | Best | Worst | Verdict |
+|-----|------|---------------|-----|------|-------|---------|
+| PPO_30b | 100,002,848 | 10 | 6.8 | 16.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 110,002,848 | 13 | 18.9 | 51.0 | 4.0 | **GENERALIZING** |
+| PPO_30b | 120,002,848 | 15 | 20.9 | 44.0 | 1.0 | **GENERALIZING** |
+| PPO_30b | 130,002,848 | 14 | 18.6 | 41.0 | 4.0 | **GENERALIZING** |
+| PPO_30b | 140,002,848 | 17 | 22.1 | 48.0 | 3.0 | **GENERALIZING** |
+| PPO_30b | 150,002,848 | 16 | 22.2 | 53.0 | 3.0 | **GENERALIZING** |
+| PPO_30b | 157,602,848 | 14 | 25.4 | 111.0 | 4.0 | **GENERALIZING** |
+| PPO_30b | 167,602,848 | 18 | 30.6 | 67.0 | 5.0 | **GENERALIZING** |
+| PPO_30b | 177,602,848 | 17 | 28.8 | 54.0 | 6.0 | **GENERALIZING** |
+| PPO_30b | 187,602,848 | 15 | 28.9 | 84.0 | 8.0 | **GENERALIZING** |
+| PPO_30b | 197,602,848 | 19 | 33.2 | 69.0 | 4.0 | **GENERALIZING** |
+
+**PPO_30b at 200M (100M sticky steps):** 🏆 **First non-sticky→sticky phase transition in this project to break memorization.** Within 10M steps of stickiness being added, the policy went from 2 unique scores to 10, and has maintained 14-19 unique scores across every check since — 100M sticky steps with zero relapses to MEMORIZED. The conservative LR restart (1e-4→1e-5) and the 100M non-sticky foundation together appear to be the winning combination. However, the single-env average score is flat at ~28-33 — the model is generalizing but not yet improving. Rollout `ep_rew_mean` (60-71) is substantially higher than the single-env memorization check average, suggesting the multi-env rollout captures better play than single-env sequential testing. 200M more sticky steps remain to convert generalization into score improvement.
 
 **What to watch for in Phase 2:** when each run transitions to sticky actions (PPO_30b, PPO_31b), the key early warning sign from Experiment 2 was `ep_rew_mean` doubling or tripling within the first 10-30M steps while `explained_variance` → 1.0 and `value_loss` → ~0. The automated `MemorizationCheckCallback` is wired into both Phase 2 scripts with `sticky_actions=True`, so this should now surface automatically in the tracking CSVs rather than requiring a manual check.
 
@@ -411,13 +452,15 @@ Automated tracking since then:
 | Both fail | Something more fundamental is going on. The "non-sticky pretraining" hypothesis may be wrong, or the phase switch LR/config needs more work. |
 | PPO_30b works, PPO_31b fails | Unexpected. Would suggest a Goldilocks effect — too much non-sticky pretraining creates habits that sticky-action training can't adapt. Worth investigating but low prior probability. |
 
+**Interim finding (at 200M):** PPO_30b has achieved the "works" threshold for generalization — 14-19 unique scores sustained for 100M sticky steps with zero relapses. But score improvement hasn't followed yet (avg flat at ~28-33). Whether this counts as "works" in the final analysis depends on whether generalization converts into higher scores in the remaining 200M steps.
+
 ---
 
 ### Status
 
-**PPO_31a at 100M: crashed from 106 → avg=20.6, best=31.** Same cycle pattern — 106-point script overwritten at ~100M. Rollout at 106M shows ep_rew_mean=121-137 and *rising*, recovery already underway with real value_loss and KL. Cycle peaks across the full run: 40→44→76→78→106 — each major cycle ~35% higher than the last. Next peak expected to exceed 106. Still 300M steps remaining.
+**IN PROGRESS.** PPO_30a Phase 1 complete. **PPO_30b: 200M/400M, GENERALIZING** — 100M sticky steps without a single relapse, first successful non-sticky→sticky transition in this project. Single-env avg is flat (~28-33) but rollout mean (60-71) is climbing. **PPO_31a: 200M/300M, MEMORIZED** — still cycling through scripts, same pattern since 10M. PPO_31b will launch once PPO_31a completes at 300M.
 
-**IN PROGRESS.** PPO_30a Phase 1 complete. **PPO_30b launched** (Phase 2, sticky on, from PPO_30a best_model). PPO_31a Phase 1 continuing (100M of 400M, crashed from 106-point peak, recovering). PPO_31b will launch once PPO_31a completes at 400M.
+**Key finding so far:** 100M non-sticky pretraining + conservative LR restart (1e-4) was sufficient to break memorization. Whether PPO_31b (300M non-sticky → 100M sticky) produces a better or worse model than PPO_30b (100M non-sticky → 300M sticky) is the open question — PPO_30b has 200M more sticky steps to convert generalization into score, while PPO_31b will have only 100M sticky steps from a deeper foundation.
 
 ---
 

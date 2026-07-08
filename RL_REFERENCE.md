@@ -1,6 +1,8 @@
 # PPO Training Reference Guide
 ### Breakout RL Agent — Levers, Outputs & Experiment History
 
+**SUMMARY:** Comprehensive PPO reference for this project. Part 1 = training parameters, Part 2 = observation modes (pixel active, RAM abandoned), Part 3 = reward shaping + sticky actions, Part 4 = training metric diagnostics with healthy ranges, Part 5 = hardware notes, Part 6 = full 27-run experiment history + eval score summaries, Part 7 = 31 lessons learned. Decision framework at end maps 18 diagnostic signals to actions. **Single most important finding:** eval score and single-env quality are inverted — PPO_27 holds the eval record (147.02) but is the worst single-env model; PPO_26 dominates single-env (avg 54.3, 0% zero-score) but has middling eval (134.16). Never judge a model by eval score alone. See Lessons 28-31 for memorization collapse detection (the behavioral test is the only reliable diagnostic — training metrics lie during collapse). Current best: 147.02 eval (pixel, sticky, PPO_27 @ 867M), best single-env: PPO_26, total steps: ~2.9B across PPO_25/26/27. Active experiment: sweeping non-sticky pretraining duration (PPO_30: 100M→300M sticky, PPO_31: 300M→100M sticky, both capped at 400M total).
+
 **Current Best: 147.02 eval (pixel-based, sticky actions, PPO_27 at 867.2M steps) | Previous Pre-Sticky Record: 140.94 (PPO_25 @ 838M) | Best Individual Game: 600+ (real score) | Total Steps Trained: ~2.9B combined across PPO_25/26/27 (PPO_26 completed at 1,001,828,352 steps)**
 
 ---

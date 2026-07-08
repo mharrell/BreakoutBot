@@ -1,11 +1,12 @@
 """
 PPO_31a — Phase 1 of Experiment 3 (long non-sticky pretraining)
-No sticky actions. Trains for 400M steps from scratch.
-When complete, PPO_31b loads this checkpoint and adds sticky actions.
+No sticky actions. Trains for 300M steps from scratch.
+When complete, PPO_31b loads this checkpoint and adds sticky actions for 100M.
+Total: 300M non-sticky + 100M sticky = 400M (matching PPO_30's 400M cap).
 
 Part of the non-sticky pretraining duration sweep:
-  PPO_30: 100M non-sticky → sticky (tests "basic competency is enough" hypothesis)
-  PPO_31: 400M non-sticky → sticky (tests "depth matters" hypothesis)
+  PPO_30: 100M non-sticky → 300M sticky (tests "basic competency is enough" hypothesis)
+  PPO_31: 300M non-sticky → 100M sticky (tests "depth matters" hypothesis)
 """
 import os
 import glob
@@ -16,11 +17,12 @@ from stable_baselines3.common.env_util import make_atari_env
 from stable_baselines3.common.vec_env import VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 from memorization_check_callback import MemorizationCheckCallback
+from brick_counter import BrickCountingVecWrapper, BrickRolloutCallback
 
 gym.register_envs(ale_py)
 
 RUN_NAME = "PPO_31a"
-TARGET_STEPS = 400_000_000
+TARGET_STEPS = 300_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 def linear_schedule(start: float, end: float):
@@ -38,6 +40,7 @@ def get_latest_checkpoint(path):
 env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=None,
                      env_kwargs={"repeat_action_probability": 0.0})
 env = VecFrameStack(env, n_stack=4)
+env = BrickCountingVecWrapper(env)
 
 eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
                           env_kwargs={"repeat_action_probability": 0.0})
@@ -70,9 +73,16 @@ memorization_callback = MemorizationCheckCallback(
     sticky_actions=False,
     check_freq=10_000_000,
     n_games=20,
+    summary_lines=[
+        "PPO_31a — Phase 1 of Experiment 3 (long non-sticky pretraining)",
+        "Non-sticky, 32 envs, fresh agent, target 300M steps",
+        "LR 2.5e-4→1e-5, clip 0.2→0.05, ent_coef=0.006, batch_size=1024",
+        "Phase 2: PPO_31b adds sticky actions (100M more steps, total 400M)",
+        "Tests hypothesis B: does 300M non-sticky pretraining beat 100M?",
+    ],
 )
 
-callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback])
+callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, BrickRolloutCallback()])
 
 resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
