@@ -1,12 +1,21 @@
 """
-Funnel recorder for PPO_30b — sticky Phase 2 model (100M non-sticky + 300M sticky).
-Standard approach: persistent env, seed=None, sticky actions provide natural
-game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
+Funnel recorder for PPO_33 — Experiment 5A evaluation.
+Evaluates the frame-skip-randomized model on STANDARD Breakout (frameskip=4,
+no sticky actions). Because PPO_33 was never trained with sticky actions,
+this standard evaluation IS the nosticky verification — there's no mask to
+strip away.
 
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
+If the model generalizes: varied scores across games, >2 unique scores,
+reactive ball-tracking confirmed. Frame skip randomization succeeded.
+If the model memorized: ≤2 unique scores, fixed scripts. Even with random
+game speed during training, the CNN found a way to memorize. Escalate to
+Experiment 5B (RAM-parameterized physics).
+
+Comparison groups (all at 400M total steps):
+  PPO_33:  RandomFrameSkip(2-8) training, standard frameskip=4 eval (tested here)
+  PPO_32:  p=0.05 single-phase
+  PPO_30b: p=0.0 pretrain -> p=0.25 (confirmed memorized, 99.8% zeros nosticky)
+  PPO_31b: p=0.0 pretrain -> p=0.25 (confirmed memorized, 31-pt script nosticky)
 """
 import ale_py
 import gymnasium as gym
@@ -23,9 +32,9 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_30b"
-STICKY_ACTIONS = True
-MODEL_PATH = f"models/{RUN_NAME}/final_model"
+RUN_NAME = "PPO_33"
+STICKY_ACTIONS = False
+MODEL_PATH = f"models/PPO_33/final_model"
 
 FUNNEL_THRESHOLD = 400
 NUM_GAMES = 10000
@@ -36,7 +45,7 @@ SLOW_FACTOR = 0.5
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-env_kwargs = {"repeat_action_probability": 0.25 if STICKY_ACTIONS else 0.0}
+env_kwargs = {"repeat_action_probability": 0.0}
 
 sb3_utils.check_for_correct_spaces = lambda *args, **kwargs: None
 env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None, env_kwargs=env_kwargs)
@@ -89,10 +98,12 @@ funnel_count = 0
 frame_buffer = [get_frame(env)]
 game_start_time = time.time()
 
-print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Threshold: {FUNNEL_THRESHOLD} | "
-      f"Cap: {NUM_GAMES}")
+print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Frameskip: 4 (standard) | "
+      f"Threshold: {FUNNEL_THRESHOLD} | Cap: {NUM_GAMES}")
+print(f"  Training: RandomFrameSkip(2-8), p=0.0")
+print(f"  Eval:     Standard frameskip=4, p=0.0 (this IS the nosticky verification)")
 print(f"Per-game log: {LOG_PATH}")
-print(f"Compare results against: PPO_26 (avg 54.3, 0.0% zero-score, 0.07% funnel)")
+print(f"Compare against: PPO_32 (p=0.05), PPO_30b/31b (both memorized)")
 print("-" * 60)
 
 while episode <= NUM_GAMES:
@@ -108,6 +119,7 @@ while episode <= NUM_GAMES:
             scores.append(real_score)
             avg = sum(scores) / len(scores)
             best = max(scores)
+            worst = min(scores)
             elapsed = time.time() - game_start_time
             game_frames = len(frame_buffer)
             agent_fps = game_frames / elapsed if elapsed > 0 else 60
@@ -145,13 +157,34 @@ while episode <= NUM_GAMES:
 env.close()
 log_file.close()
 
+# --- Results ---
 print("-" * 60)
 print(f"--- Final Results: {RUN_NAME} ({len(scores)} games) ---")
-print(f"Average Score:    {sum(scores)/len(scores):.1f}  (PPO_26: 54.3)")
+print(f"  Training: RandomFrameSkip(2-8), p=0.0, 400M steps")
+print(f"  Eval:     Standard frameskip=4, p=0.0, deterministic=True")
+print(f"Average Score:    {sum(scores)/len(scores):.1f}")
+print(f"Median Score:     {sorted(scores)[len(scores)//2]:.1f}")
 print(f"Best Score:       {max(scores):.1f}")
 print(f"Worst Score:      {min(scores):.1f}")
 zero_count = sum(1 for s in scores if s == 0)
-print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)  "
-      f"(PPO_26: 0.0%, PPO_25: 20.0%)")
-print(f"Funnel Rate ({FUNNEL_THRESHOLD}+ pts): {funnel_count}/{len(scores)} "
-      f"({100*funnel_count/len(scores):.2f}%)  (PPO_26: 0.07%)")
+print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)")
+funnel_pct = 100 * funnel_count / len(scores) if len(scores) > 0 else 0
+print(f"Funnel Rate ({FUNNEL_THRESHOLD}+ pts): {funnel_count}/{len(scores)} ({funnel_pct:.2f}%)")
+
+unique = len(set(scores))
+print(f"\nUnique scores: {unique}")
+if unique <= 2:
+    verdict = "MEMORIZED"
+    description = "≤2 unique scores — deterministic script. Frame skip randomization failed."
+elif 3 <= unique <= 9:
+    verdict = "PARTIAL"
+    description = "3-9 unique scores — some variance but not full generalization."
+else:
+    verdict = "GENERALIZING"
+    description = "≥10 unique scores — genuine score variance, likely ball-tracking."
+print(f"Verdict: {verdict}")
+print(f"  {description}")
+if unique <= 2:
+    print(f"  Next: Experiment 5B (RAM-parameterized physics)")
+else:
+    print(f"  Next: Confirm with stochastic inference, then compare against PPO_32")

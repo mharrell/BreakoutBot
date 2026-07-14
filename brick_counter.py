@@ -1,13 +1,17 @@
 """
 BrickCountingVecWrapper — wraps a VecEnv and counts clipped-reward brick hits
-per episode. Adds 'bricks_cleared' to info[env_idx]['episode'] so EvalCallback
-and watch scripts can log brick counts alongside raw game scores.
+per episode. Augments episode info with 'bricks_cleared' so EvalCallback and
+watch scripts can log brick counts alongside raw game scores.
 
 Only counts positive (non-zero) rewards to avoid double-counting frame-skip
 accumulation. Assumes ClipRewardEnv is active (rewards are {-1, 0, 1}).
 
-Also stores completed episode brick counts in episode_brick_buffer so a
-callback can read and log them alongside rollout ep_rew_mean.
+Only adds bricks_cleared to an existing 'episode' info dict — never creates
+a new one. This preserves 'r' and 'l' from the underlying env (ALE) so that
+SB3's ep_rew_mean and ep_len_mean logging still works. At life-loss events
+(EpisodicLifeEnv), the ALE hasn't terminated its internal episode, so no
+episode dict exists yet — those events are skipped here and bricks are
+tracked via episode_brick_buffer for BrickRolloutCallback instead.
 """
 import numpy as np
 from stable_baselines3.common.vec_env import VecEnvWrapper
@@ -36,8 +40,6 @@ class BrickCountingVecWrapper(VecEnvWrapper):
                     self.episode_brick_buffer.append(int(self.brick_counts[i]))
                     if "episode" in infos[i]:
                         infos[i]["episode"]["bricks_cleared"] = int(self.brick_counts[i])
-                    elif "terminal_observation" not in infos[i]:
-                        infos[i]["episode"] = {"bricks_cleared": int(self.brick_counts[i])}
                     self.brick_counts[i] = 0
         return obs, rewards, dones, infos
 

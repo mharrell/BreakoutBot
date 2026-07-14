@@ -1,12 +1,21 @@
 """
-Funnel recorder for PPO_30b — sticky Phase 2 model (100M non-sticky + 300M sticky).
-Standard approach: persistent env, seed=None, sticky actions provide natural
-game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
+Funnel recorder for PPO_32 — Experiment 4 (low-sticky single-phase training).
+PPO_32 trains from scratch with repeat_action_probability=0.05 for 400M steps.
+This eval uses p=0.25 (standard eval protocol) for comparison against PPO_30b
+and PPO_31b, which were both evaluated at p=0.25.
 
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
+Goldilocks hypothesis: p=0.05 provides enough stochasticity to prevent
+deterministic script memorization (unlike p=0.0) but not so much noise that
+the policy fails to build reliable reactive foundations (unlike p=0.25,
+which produced PPO_27's 21% zero-score rate).
+
+Full 10,000-game run for matched comparison with PPO_30b/PPO_31b at 400M total.
+Also compare sticky probability sweep at 500 games each (p=0.05-0.25).
+
+Comparison baselines (all at 400M total steps):
+  PPO_30b (100M non-sticky + 300M sticky): avg 27.7, 23.2% zero-score
+  PPO_31b (300M non-sticky + 100M sticky): avg 22.2, 2.4% zero-score
+  Both confirmed MEMORIZED — sticky-on performance = noise-masked scripts
 """
 import ale_py
 import gymnasium as gym
@@ -23,7 +32,7 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_30b"
+RUN_NAME = "PPO_32"
 STICKY_ACTIONS = True
 MODEL_PATH = f"models/{RUN_NAME}/final_model"
 
@@ -92,7 +101,8 @@ game_start_time = time.time()
 print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Threshold: {FUNNEL_THRESHOLD} | "
       f"Cap: {NUM_GAMES}")
 print(f"Per-game log: {LOG_PATH}")
-print(f"Compare results against: PPO_26 (avg 54.3, 0.0% zero-score, 0.07% funnel)")
+print(f"Experiment 4: Low-sticky single-phase (trained at p=0.05, evaluated at p=0.25)")
+print(f"Compare against: PPO_30b (avg 27.7, 23.2% zero) | PPO_31b (avg 22.2, 2.4% zero)")
 print("-" * 60)
 
 while episode <= NUM_GAMES:
@@ -147,11 +157,16 @@ log_file.close()
 
 print("-" * 60)
 print(f"--- Final Results: {RUN_NAME} ({len(scores)} games) ---")
-print(f"Average Score:    {sum(scores)/len(scores):.1f}  (PPO_26: 54.3)")
+print(f"Average Score:    {sum(scores)/len(scores):.1f}")
 print(f"Best Score:       {max(scores):.1f}")
 print(f"Worst Score:      {min(scores):.1f}")
 zero_count = sum(1 for s in scores if s == 0)
-print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)  "
-      f"(PPO_26: 0.0%, PPO_25: 20.0%)")
+print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)")
 print(f"Funnel Rate ({FUNNEL_THRESHOLD}+ pts): {funnel_count}/{len(scores)} "
-      f"({100*funnel_count/len(scores):.2f}%)  (PPO_26: 0.07%)")
+      f"({100*funnel_count/len(scores):.2f}%)")
+print()
+print("Comparison (all at 400M total, p=0.25 eval):")
+print(f"  PPO_30b: avg 27.7, 23.2% zero-score, 0.07% funnel")
+print(f"  PPO_31b: avg 22.2, 2.4% zero-score, 0.00% funnel")
+print(f"  PPO_32:  avg {sum(scores)/len(scores):.1f}, {100*zero_count/len(scores):.1f}% zero-score, "
+      f"{100*funnel_count/len(scores):.2f}% funnel")

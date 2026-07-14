@@ -1,12 +1,11 @@
 """
-Funnel recorder for PPO_30b — sticky Phase 2 model (100M non-sticky + 300M sticky).
-Standard approach: persistent env, seed=None, sticky actions provide natural
-game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
+Resume PPO_31b funnel evaluation from where it left off.
 
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
+Reads the existing funnel log to find the last completed game number,
+then continues from the next game. Appends to the existing log.
+
+Usage:
+    python complete_ppo31b_funnel.py
 """
 import ale_py
 import gymnasium as gym
@@ -23,12 +22,12 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_30b"
+RUN_NAME = "PPO_31b"
 STICKY_ACTIONS = True
 MODEL_PATH = f"models/{RUN_NAME}/final_model"
 
 FUNNEL_THRESHOLD = 400
-NUM_GAMES = 10000
+TOTAL_GAMES = 10000
 OUTPUT_DIR = "recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60
@@ -36,6 +35,31 @@ SLOW_FACTOR = 0.5
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# --- Find where we left off ---
+existing_games = 0
+existing_scores = []
+existing_funnels = 0
+if os.path.exists(LOG_PATH):
+    with open(LOG_PATH, "r") as f:
+        reader = csv.reader(f)
+        header = next(reader, None)
+        for row in reader:
+            if row and len(row) >= 2:
+                existing_games += 1
+                score = float(row[1])
+                existing_scores.append(score)
+                if score >= FUNNEL_THRESHOLD:
+                    existing_funnels += 1
+
+print(f"Existing log: {existing_games} games completed")
+print(f"Current average: {sum(existing_scores)/len(existing_scores):.1f}" if existing_scores else "No scores yet")
+print(f"Remaining: {TOTAL_GAMES - existing_games} games to reach {TOTAL_GAMES}")
+
+if existing_games >= TOTAL_GAMES:
+    print("Evaluation already complete!")
+    exit(0)
+
+# --- Setup ---
 env_kwargs = {"repeat_action_probability": 0.25 if STICKY_ACTIONS else 0.0}
 
 sb3_utils.check_for_correct_spaces = lambda *args, **kwargs: None
@@ -74,28 +98,24 @@ def slow_down_video(input_path, factor=0.5):
     return None
 
 
-log_is_new = not os.path.exists(LOG_PATH)
+# Open log in append mode
 log_file = open(LOG_PATH, "a", newline="")
 log_writer = csv.writer(log_file)
-if log_is_new:
-    log_writer.writerow(["episode", "real_score", "is_funnel", "frame_count",
-                          "agent_fps", "timestamp"])
-    log_file.flush()
 
 obs = env.reset()
-episode = 1
-scores = []
-funnel_count = 0
+episode = existing_games + 1  # continue from where we left off
+scores = list(existing_scores)
+funnel_count = existing_funnels
 frame_buffer = [get_frame(env)]
 game_start_time = time.time()
+games_to_run = TOTAL_GAMES - existing_games
 
-print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Threshold: {FUNNEL_THRESHOLD} | "
-      f"Cap: {NUM_GAMES}")
+print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Target: {TOTAL_GAMES} | "
+      f"Starting at game {episode}")
 print(f"Per-game log: {LOG_PATH}")
-print(f"Compare results against: PPO_26 (avg 54.3, 0.0% zero-score, 0.07% funnel)")
 print("-" * 60)
 
-while episode <= NUM_GAMES:
+while episode <= TOTAL_GAMES:
     action, _ = model.predict(obs, deterministic=True)
     obs, reward, done, info = env.step(action)
     frame_buffer.append(get_frame(env))
@@ -127,9 +147,12 @@ while episode <= NUM_GAMES:
                     print(f"*** SLOW: {slow_path} ***")
 
             funnel_rate = f"{funnel_count}/{episode} ({100*funnel_count/episode:.1f}%)"
+            games_done = episode - existing_games
+            remaining = TOTAL_GAMES - episode
             print(f"Game {episode:>5} | Score: {real_score:>6.0f} | Avg: {avg:>6.1f} | "
                   f"Best: {best:>6.0f} | Frames: {game_frames:>5} | "
-                  f"Agent FPS: {agent_fps:>5.0f} | Funnels: {funnel_rate}")
+                  f"Agent FPS: {agent_fps:>5.0f} | Done: {games_done}/{games_to_run} "
+                  f"(-{remaining}) | Funnels: {funnel_rate}")
 
             log_writer.writerow([episode, real_score, int(is_funnel), game_frames,
                                   round(agent_fps, 1), datetime.now().isoformat()])
@@ -147,11 +170,11 @@ log_file.close()
 
 print("-" * 60)
 print(f"--- Final Results: {RUN_NAME} ({len(scores)} games) ---")
-print(f"Average Score:    {sum(scores)/len(scores):.1f}  (PPO_26: 54.3)")
+print(f"Average Score:    {sum(scores)/len(scores):.1f}")
 print(f"Best Score:       {max(scores):.1f}")
 print(f"Worst Score:      {min(scores):.1f}")
 zero_count = sum(1 for s in scores if s == 0)
-print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)  "
-      f"(PPO_26: 0.0%, PPO_25: 20.0%)")
+print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)")
 print(f"Funnel Rate ({FUNNEL_THRESHOLD}+ pts): {funnel_count}/{len(scores)} "
-      f"({100*funnel_count/len(scores):.2f}%)  (PPO_26: 0.07%)")
+      f"({100*funnel_count/len(scores):.2f}%)")
+print(f"\nEvaluation COMPLETE at {len(scores)} games.")

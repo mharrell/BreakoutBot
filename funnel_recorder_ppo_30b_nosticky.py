@@ -1,12 +1,8 @@
 """
-Funnel recorder for PPO_30b — sticky Phase 2 model (100M non-sticky + 300M sticky).
-Standard approach: persistent env, seed=None, sticky actions provide natural
-game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
-
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
+Funnel recorder for PPO_30b — sticky-OFF verification (Experiment 2 pattern).
+Confirms that removing sticky actions from PPO_30b/final_model causes memorization
+collapse (≤2 unique scores, fixed scripts). Shorter run (500 games) since we only
+need a binary collapse/no-collapse verdict, not precise metrics.
 """
 import ale_py
 import gymnasium as gym
@@ -23,12 +19,12 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_30b"
-STICKY_ACTIONS = True
-MODEL_PATH = f"models/{RUN_NAME}/final_model"
+RUN_NAME = "PPO_30b_nosticky"
+STICKY_ACTIONS = False
+MODEL_PATH = f"models/PPO_30b/final_model"
 
 FUNNEL_THRESHOLD = 400
-NUM_GAMES = 10000
+NUM_GAMES = 500
 OUTPUT_DIR = "recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60

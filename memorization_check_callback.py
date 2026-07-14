@@ -57,7 +57,7 @@ class MemorizationCheckCallback(BaseCallback):
     def _init_callback(self):
         os.makedirs(self.output_dir, exist_ok=True)
         is_new = not os.path.exists(self.track_log_path)
-        self.track_log_file = open(self.track_log_path, "a", newline="")
+        self.track_log_file = open(self.track_log_path, "a", newline="", encoding="utf-8")
         self.track_log_writer = csv.writer(self.track_log_file)
         if is_new:
             for line in self.summary_lines:

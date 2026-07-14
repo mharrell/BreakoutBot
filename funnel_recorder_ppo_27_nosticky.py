@@ -1,12 +1,23 @@
 """
-Funnel recorder for PPO_30b — sticky Phase 2 model (100M non-sticky + 300M sticky).
-Standard approach: persistent env, seed=None, sticky actions provide natural
-game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
+Funnel recorder for PPO_27 — sticky-OFF verification.
+PPO_27 is the only model trained entirely with sticky actions (p=0.25 from
+step one, ~1B steps). Unlike every other sticky-trained model (PPO_26, PPO_28,
+PPO_29, PPO_30b, PPO_31b), PPO_27 NEVER had a non-sticky pretraining phase.
 
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
+This is the critical test: can training with stochasticity from step one prevent
+memorization, even if it produces a weaker policy? PPO_27 was the worst single-env
+performer (21.3% zero-score with sticky on) but holds the all-time eval record
+(147.02). It may be the only genuinely generalizing model in the project.
+
+If PPO_27 collapses without sticky: sticky actions during training also don't
+  prevent memorization — they just produce different-looking scripts. No model
+  in this project has ever generalized.
+
+If PPO_27 does NOT collapse: training with stochasticity from step one is
+  the only path that prevents memorization. The performance cost (21% zero-score)
+  is the price of genuine reactivity.
+
+500 games, sticky off, persistent env, seed=None, deterministic=True.
 """
 import ale_py
 import gymnasium as gym
@@ -23,12 +34,12 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_30b"
-STICKY_ACTIONS = True
-MODEL_PATH = f"models/{RUN_NAME}/final_model"
+RUN_NAME = "PPO_27_nosticky"
+STICKY_ACTIONS = False
+MODEL_PATH = f"models/PPO_27/final_model"
 
 FUNNEL_THRESHOLD = 400
-NUM_GAMES = 10000
+NUM_GAMES = 500
 OUTPUT_DIR = "recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60
@@ -92,7 +103,16 @@ game_start_time = time.time()
 print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Threshold: {FUNNEL_THRESHOLD} | "
       f"Cap: {NUM_GAMES}")
 print(f"Per-game log: {LOG_PATH}")
-print(f"Compare results against: PPO_26 (avg 54.3, 0.0% zero-score, 0.07% funnel)")
+print(f"PPO_27: p=0.25 from scratch, ~1B steps — the only model without non-sticky pretraining")
+print(f"PPO_27 sticky-ON baseline: worst single-env performer (21.3% zero-score)")
+print(f"PPO_27 sticky-ON eval record: 147.02 (all-time best)")
+print(f"Sticky-trained models tested nosticky so far: ALL COLLAPSED")
+print(f"  PPO_26: 1 unique score (60 pts, 264 frames)")
+print(f"  PPO_30b: 2 unique scores (0, 69), 99.8% zeros")
+print(f"  PPO_31b: 2 unique scores (29, 31), all 31 pts, 178 frames")
+print(f"PPO_27 is the last untested sticky-trained model — and the only one trained")
+print(f"with stochasticity from step one. If this also collapses, no model in this")
+print(f"project has ever genuinely generalized.")
 print("-" * 60)
 
 while episode <= NUM_GAMES:
@@ -147,11 +167,27 @@ log_file.close()
 
 print("-" * 60)
 print(f"--- Final Results: {RUN_NAME} ({len(scores)} games) ---")
-print(f"Average Score:    {sum(scores)/len(scores):.1f}  (PPO_26: 54.3)")
+print(f"Average Score:    {sum(scores)/len(scores):.1f}")
 print(f"Best Score:       {max(scores):.1f}")
 print(f"Worst Score:      {min(scores):.1f}")
+unique_scores = len(set(scores))
 zero_count = sum(1 for s in scores if s == 0)
-print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)  "
-      f"(PPO_26: 0.0%, PPO_25: 20.0%)")
+print(f"Unique Scores:    {unique_scores}")
+print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)")
 print(f"Funnel Rate ({FUNNEL_THRESHOLD}+ pts): {funnel_count}/{len(scores)} "
-      f"({100*funnel_count/len(scores):.2f}%)  (PPO_26: 0.07%)")
+      f"({100*funnel_count/len(scores):.2f}%)")
+print()
+print("Comparison — every sticky-trained model tested nosticky:")
+print(f"  PPO_26:  1 unique score (60 pts, 264 frames) — MEMORIZED")
+print(f"  PPO_30b: 2 unique scores (0, 69), 99.8% zeros — MEMORIZED")
+print(f"  PPO_31b: 2 unique scores (29, 31), all 31 pts — MEMORIZED")
+print(f"  PPO_27:  {unique_scores} unique scores")
+print()
+if unique_scores <= 2:
+    print("*** VERDICT: PPO_27 is MEMORIZED — sticky-from-scratch also doesn't prevent collapse ***")
+    print("    No model in this project has ever genuinely generalized.")
+elif unique_scores <= 9:
+    print(f"VERDICT: PARTIAL — {unique_scores} unique scores with det=True suggests some reactivity")
+else:
+    print(f"VERDICT: PPO_27 GENERALIZES — {unique_scores} unique scores confirms training with")
+    print(f"    stochasticity from step one prevents memorization, even if performance suffers.")

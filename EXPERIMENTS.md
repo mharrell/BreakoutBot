@@ -1,11 +1,23 @@
 # Experiments
 
 **SUMMARY — Three experiments testing sticky actions in Breakout RL:**
-- **Experiment 1 (COMPLETE):** PPO_25 (no sticky) vs PPO_26 (deep pretraining + sticky) vs PPO_27 (fresh + sticky). **Finding:** sticky actions alone don't fix the zero-score blind spot — PPO_26 (deep foundation + sticky) eliminated zero-score (0.0%), PPO_27 (fresh + sticky) matched PPO_25's 20%. Eval score and single-env rankings are inverted — PPO_27 holds the eval record (147.02) but is the worst single-env model on every metric. **Central conclusion:** needs both ingredients — deep non-sticky pretraining AND sticky actions permanently.
+- **Experiment 1 (COMPLETE — key finding overturned 2026-07-14):** PPO_25 (no sticky) vs PPO_26 (deep pretraining + sticky) vs PPO_27 (fresh + sticky). **PPO_26 CONFIRMED MEMORIZED by nosticky verification (2026-07-14).** Without sticky actions: Game 1 = 67 pts, Games 2+ = every game exactly 60.0 points, 264 frames — a fixed script. PPO_26's sticky-on performance (avg 54.3, 0% zero-score) was noise-masked memorization, identical to PPO_30b/PPO_31b. **The "both ingredients" recipe does NOT produce generalization — it produces better memorized scripts.** PPO_27 (sticky from scratch, p=0.25) remains the only model trained with stochasticity throughout — and it was the worst single-env performer. **Revised conclusion:** non-sticky pretraining causes permanent memorization that no amount of sticky fine-tuning has ever cured. Deep pretraining produces higher-scoring scripts (PPO_26: 60 pts > PPO_31b: 31 pts > PPO_30b: 0 pts) but never reactive policies.
 - **Experiment 2 (COMPLETE):** PPO_28/29 — removed sticky actions from trained models. **Finding:** both collapsed to fixed open-loop action sequences within ~30M steps. Training metrics (EV, value_loss, entropy) lied during collapse. Sticky actions are required at inference time, not just during training.
-- **Experiment 3 (IN PROGRESS):** PPO_30/31 — sweeping non-sticky pretraining duration before adding sticky. **PPO_30b: GENERALIZING at 200M/400M** 🏆 — first successful non-sticky→sticky transition in this project (100M sticky steps, zero relapses). Single-env avg flat at ~28-33 but generalization is real. **PPO_31a: MEMORIZED at 200M/300M** — still cycling through memorized scripts, same pattern since 10M. Key finding so far: 100M non-sticky pretraining was enough to break memorization. Open question: does 300M non-sticky (PPO_31b) produce a better model with only 100M sticky steps?
+- **Experiment 3 (COMPLETE — conclusions overturned by post-hoc analysis):** PPO_30/31 — non-sticky pretraining duration sweep at 400M total budget. **Both models CONFIRMED MEMORIZED.** The Phase 2 "GENERALIZING" verdicts were sticky-action noise — calibration shows a dead policy + p=0.25 sticky produces 8-14 unique scores, matching the observed 10-19 range. Nosticky verification confirms both collapse to ≤2 unique scores. PPO_30b: 2 unique (99.8% zeros). PPO_31b: 2 unique (all 31-point script). The "trade-off" is between which memorized script each learned, not between generalization quality. See Post-Hoc Analysis section below.
 
-**Current priority:** Experiment 3, item 6 (non-sticky pretraining duration sweep). See Planned Next Steps table at bottom of Experiment 1 section for full priority list.
+**Current priority:** Experiment 4 — PPO_32 (low-sticky single-phase, p=0.05) training on GPU. PPO_26 nosticky verification complete (CONFIRMED MEMORIZED: 60-point script × 500 games). **Experiment 5 (Dynamics Randomization) designed and ready** — will proceed if PPO_32 also memorizes. Dependency chain: frame skip randomization → RAM-parameterized physics → custom ROM (see Experiment 5 section below).
+
+## ⚠️ Known Limitations
+
+This document reports results from experiments with known methodological flaws. A comprehensive audit is maintained in `FLAWS.md`. **Before citing any conclusion from this document, read the relevant flaw entries.** The most consequential active limitations:
+
+- **F-001 (CONFIRMED):** The MemorizationCheckCallback "GENERALIZING" verdict is INVALID for sticky-action models. Calibration: dead policy + p=0.25 sticky = 8-14 unique scores (mean 11.3). At p=0.05: 55-63 unique scores. The verdict measures sticky probability, not policy quality. Nosticky verification is the only reliable behavioral test.
+- **F-002:** In Experiment 3, pretraining duration and sticky-step count are perfectly anti-correlated at the 400M total budget. Cannot attribute outcomes to either variable independently.
+- **F-003 (RESOLVED 2026-07-14):** PPO_26 CONFIRMED MEMORIZED by nosticky verification. Without sticky actions: every game exactly 60.0 points, 264 frames — a fixed script. PPO_26's sticky-on dominance was a better memorized script + noise, not generalization. No model in this project has ever genuinely generalized.
+- **F-004 (RESOLVED):** PPO_31b's 10k-game evaluation was completed (10,000 games as of 2026-07-14). Stats: avg 22.2, median 20, 2.4% zero-score.
+- **F-010:** Funnel rate comparisons (0-7 events in 10,000 trials) are not statistically significant. Treat funnel rate rankings as directional indicators, not settled differences.
+
+These and other limitations (confounded LR restart values, unmatched n_envs, mid-training evaluations, missing sticky-off verification, etc.) are documented with severity ratings and recommended remedies in `FLAWS.md`.
 
 ## Experiment 1: Sticky Actions and Training Regime — PPO_26 vs PPO_27
 
@@ -416,8 +428,18 @@ Automated tracking since then:
 | PPO_31a | 180,000,000 | 2 | 39.9 | 41.0 | 18.0 | MEMORIZED |
 | PPO_31a | 190,000,000 | 2 | 26.6 | 27.0 | 18.0 | MEMORIZED |
 | PPO_31a | 200,000,000 | 2 | 21.1 | 81.0 | 18.0 | MEMORIZED |
+| PPO_31a | 210,000,000 | 2 | 20.3 | 64.0 | 18.0 | MEMORIZED |
+| PPO_31a | 220,000,000 | 1 | 63.0 | 63.0 | 63.0 | MEMORIZED |
+| PPO_31a | 224,000,000 | 1 | 18.0 | 18.0 | 18.0 | MEMORIZED |
+| PPO_31a | 234,000,000 | 1 | 64.0 | 64.0 | 64.0 | MEMORIZED |
+| PPO_31a | 244,000,000 | 2 | 20.3 | 64.0 | 18.0 | MEMORIZED |
+| PPO_31a | 254,000,000 | 2 | 20.3 | 64.0 | 18.0 | MEMORIZED |
+| PPO_31a | 264,000,000 | 1 | 18.0 | 18.0 | 18.0 | MEMORIZED |
+| PPO_31a | 274,000,000 | 2 | 20.3 | 64.0 | 18.0 | MEMORIZED |
+| PPO_31a | 284,000,000 | 2 | 20.3 | 64.0 | 18.0 | MEMORIZED |
+| PPO_31a | 294,000,000 | 2 | 20.3 | 64.0 | 18.0 | MEMORIZED |
 
-**PPO_31a Phase 1 at 200M (of 300M target):** The cycling pattern continues unchanged — 23→64→crash to 18→rebuild to 81→crash again. Each cycle finds a slightly better peak (132 at 130M, 81 at 200M) but immediately overwrites it. The policy still has zero generalization — every check except one at 130M shows only 1-2 unique scores. 100M non-sticky steps remaining before Phase 2.
+**PPO_31a Phase 1 COMPLETE at ~298,000,000 steps.** The cycling pattern never broke — every single check across the full 300M steps showed MEMORIZED (1-2 unique scores). The policy settled into a stable attractor cycling between exactly two scripts: a 64-point script and an 18-point script (with rare 20.3-point variants). final_model saved at ~298M.
 
 **PPO_30a Phase 1 COMPLETE at 100,002,816 steps.** The cycling pattern came full circle — the policy returned to its 102-point peak script right at the finish line (avg=98.9, best=102), after spending steps 65M-95M in crash/trough phases. Rollout at completion: ep_rew_mean=67-70, LR=1e-05, approx_kl=8e-6, clip_fraction=0.000183 — completely frozen. `best_model.zip` captures the 98-102 point quality. **PPO_30b launched from `PPO_30a/best_model`.**
 
@@ -441,6 +463,23 @@ Automated tracking since then:
 
 **PPO_30b at 200M (100M sticky steps):** 🏆 **First non-sticky→sticky phase transition in this project to break memorization.** Within 10M steps of stickiness being added, the policy went from 2 unique scores to 10, and has maintained 14-19 unique scores across every check since — 100M sticky steps with zero relapses to MEMORIZED. The conservative LR restart (1e-4→1e-5) and the 100M non-sticky foundation together appear to be the winning combination. However, the single-env average score is flat at ~28-33 — the model is generalizing but not yet improving. Rollout `ep_rew_mean` (60-71) is substantially higher than the single-env memorization check average, suggesting the multi-env rollout captures better play than single-env sequential testing. 200M more sticky steps remain to convert generalization into score improvement.
 
+**PPO_31b memorization track (sticky on, target 400M total, LR restart at 1e-4→1e-5):**
+
+| Run | Step | Unique Scores | Avg | Best | Worst | Verdict |
+|-----|------|---------------|-----|------|-------|---------|
+| PPO_31b | 300,001,312 | 10 | 5.5 | 15.0 | 0.0 | **GENERALIZING** |
+| PPO_31b | 310,001,312 | 13 | 14.7 | 31.0 | 4.0 | **GENERALIZING** |
+| PPO_31b | 320,001,312 | 15 | 16.1 | 33.0 | 3.0 | **GENERALIZING** |
+| PPO_31b | 330,001,312 | 15 | 19.4 | 53.0 | 7.0 | **GENERALIZING** |
+| PPO_31b | 340,001,312 | 14 | 17.7 | 68.0 | 0.0 | **GENERALIZING** |
+| PPO_31b | 350,001,312 | 15 | 21.9 | 44.0 | 1.0 | **GENERALIZING** |
+| PPO_31b | 360,001,312 | 13 | 17.6 | 35.0 | 6.0 | **GENERALIZING** |
+| PPO_31b | 370,001,312 | 16 | 19.9 | 59.0 | 0.0 | **GENERALIZING** |
+| PPO_31b | 380,001,312 | 19 | 28.1 | 77.0 | 9.0 | **GENERALIZING** |
+| PPO_31b | 390,001,312 | 16 | 25.2 | 62.0 | 4.0 | **GENERALIZING** |
+
+**PPO_31b at 400M (100M sticky steps):** GENERALIZING on all 10 checks (10/10). Unique scores range 10-19. Average score rose from 5.5 (immediately post-transition) to 25-28 in the final checks, with best scores reaching 77. The model shows the same breakout-from-memorization pattern as PPO_30b — immediate jump to 10+ unique scores on the first check after stickiness is added, sustained across the full 100M sticky phase. However, PPO_31b's best scores are substantially lower than PPO_30b's (77 vs. 378), consistent with having only 100M sticky steps vs. PPO_30b's 300M.
+
 **What to watch for in Phase 2:** when each run transitions to sticky actions (PPO_30b, PPO_31b), the key early warning sign from Experiment 2 was `ep_rew_mean` doubling or tripling within the first 10-30M steps while `explained_variance` → 1.0 and `value_loss` → ~0. The automated `MemorizationCheckCallback` is wired into both Phase 2 scripts with `sticky_actions=True`, so this should now surface automatically in the tracking CSVs rather than requiring a manual check.
 
 **Predicted outcome table** (to be confirmed by data):
@@ -456,14 +495,420 @@ Automated tracking since then:
 
 ---
 
+### Final Results — 10,000-Game Single-Env Evaluations (Sticky On)
+
+> ⚠️ **PPO_31b evaluation is INCOMPLETE.** The funnel log (`recordings/PPO_31b_funnel_log.csv`) contains only 9,247 games (753 short of the 10,000 target). All PPO_31b statistics below were computed from this incomplete sample. While 9,247 games is a large sample and the statistics are unlikely to change dramatically, they should not be cited as final until the remaining 753 games are run. See FLAWS.md F-004.
+
+Both models evaluated at 400M total steps using `final_model` with identical methodology to PPO_25/26/27 (persistent env, seed=None, sticky on).
+
+#### Head-to-Head Baseline Comparison
+
+| | PPO_26 | PPO_25 | PPO_27 | **PPO_30b** | **PPO_31b** |
+|---|---|---|---|---|---|
+| Pretrain→Sticky | 838M→1B | 1B→0 | 0→~880M | 100M→300M | 300M→100M |
+| **Average** | 54.3 | 34.6 | 27.95 | **27.7** | **22.1** |
+| **Median** | 46 | 30 | 23 | 21 | 20 |
+| **Best** | 415 | 406 | 406 | 393 | 364 |
+| **Zero-score** | 0.0% | 20.0% | 21.3% | **23.2%** | **2.3%** |
+| **Funnel 400+** | 0.07% | 0.02% | 0.01% | 0.00% | 0.00% |
+
+Neither model approaches PPO_26. The "100M beats 300M" claim from interim rollout data was wrong — there's a real trade-off.
+
+#### Score Distribution Analysis
+
+| Threshold | PPO_30b | PPO_31b |
+|-----------|---------|---------|
+| ≤0 | 23.2% | 2.3% |
+| ≤5 | 29.0% | 11.3% |
+| ≤10 | 35.3% | 23.8% |
+| ≤20 | 49.4% | **51.9%** |
+| ≤30 | 63.9% | 75.4% |
+| ≤40 | 75.6% | 89.3% |
+| ≤50 | 85.4% | 95.6% |
+| ≤60 | 91.0% | 98.2% |
+| ≤100 | 98.3% | 99.9% |
+
+| Percentile | PPO_30b | PPO_31b |
+|------------|---------|---------|
+| P5 | 0 | 4 |
+| P10 | 0 | 5 |
+| P25 | 4 | 11 |
+| P50 (median) | 21 | 20 |
+| P75 | 40 | 30 |
+| P90 | 58 | 41 |
+| P95 | 72 | 49 |
+| P99 | 231 | 67 |
+
+**Conditional stats (non-zero games only):**
+
+| | PPO_30b | PPO_31b |
+|---|---|---|
+| Non-zero count | 7,677 (76.8%) | 9,030 (97.7%) |
+| Non-zero average | 36.1 | 22.7 |
+| Non-zero median | 29 | 20 |
+
+### Outcome — A Trade-Off, Not a Winner
+
+The central finding of Experiment 3 is that sticky steps and non-sticky pretraining contribute to different things:
+
+- **More sticky training (PPO_30b):** Produces the capability for high scores — P99 of 231, non-zero average of 36.1, individual games up to 393. But 23.2% of games score zero, worse than PPO_25's baseline. The model has genuine skill but a catastrophic failure mode.
+- **More non-sticky pretraining (PPO_31b):** Suppresses catastrophic failure — only 2.3% zero-score, the best of any model except PPO_26. But scores are tightly capped: P99 of 67, no game above 364, average only 22.1. The model is consistent but never brilliant.
+
+The medians are nearly identical (21 vs 20). The 5.6-point gap in averages comes entirely from the right tail — PPO_30b occasionally plays well, while PPO_31b almost never does.
+
+**PPO_26 had both** (0% zero-score AND 54.3 average) because it had massive amounts of both ingredients (~838M non-sticky + ~1B sticky). At a 400M budget, you have to choose which to favor, and neither choice gets close to the full recipe.
+
+**Interim signals were misleading.** The rollout mean gap (101 vs 43), the memo check GENERALIZING streak (33/33), and the massive outlier scores (368, 378) painted PPO_30b as dominant. The 10k-game data shows PPO_30b is just PPO_27 with a slightly fatter tail — same zero-score problem, same median. PPO_31b is actually the more interesting model: it achieves a 2.3% zero-score rate with only 400M total steps, while PPO_25 needed 1B non-sticky steps to reach 20%. The non-sticky pretraining is clearly building something real.
+
 ### Status
 
-**IN PROGRESS.** PPO_30a Phase 1 complete. **PPO_30b: 200M/400M, GENERALIZING** — 100M sticky steps without a single relapse, first successful non-sticky→sticky transition in this project. Single-env avg is flat (~28-33) but rollout mean (60-71) is climbing. **PPO_31a: 200M/300M, MEMORIZED** — still cycling through scripts, same pattern since 10M. PPO_31b will launch once PPO_31a completes at 300M.
+**EXPERIMENT 3 — COMPLETE.** Both models evaluated at 10k games. PPO_30a, PPO_31a, PPO_30b, PPO_31b all finished. Results documented above. See Experiment 4 for next directions.
 
-**Key finding so far:** 100M non-sticky pretraining + conservative LR restart (1e-4) was sufficient to break memorization. Whether PPO_31b (300M non-sticky → 100M sticky) produces a better or worse model than PPO_30b (100M non-sticky → 300M sticky) is the open question — PPO_30b has 200M more sticky steps to convert generalization into score, while PPO_31b will have only 100M sticky steps from a deeper foundation.
+---
+
+### Post-Hoc Analysis: Memorization Confirmation (2026-07-14)
+
+After Experiment 3 was declared complete, three additional analyses were run to verify whether the Phase 2 models genuinely generalized or were memorized policies masked by sticky-action noise. The results overturn the central "both models generalize" conclusion.
+
+#### Memorization Check Calibration
+
+A known-memorized model (PPO_30a/final_model, confirmed 2 unique scores in all non-sticky checks) was run through the MemorizationCheckCallback with `sticky_actions=True` to measure the noise baseline.
+
+| Condition | Mean Unique | Range | P95 |
+|-----------|------------|-------|-----|
+| Non-sticky (p=0.0) | 2.0 | 2-2 | 2 |
+| Sticky (p=0.25) | **11.3** | **8-14** | **14** |
+
+A dead memorized policy + p=0.25 sticky noise produces 8-14 unique scores per 20-game batch, averaging 11.3. Both PPO_30b (10-19) and PPO_31b (10-19) fall partially within this noise baseline. **The GENERALIZING verdict is not reliable for sticky-action models.**
+
+Full calibration data: `recordings/memorization_calibration.csv`
+
+#### Sticky-Off Verification (Both Models)
+
+| Model | Sticky Off Unique Scores | Verdict |
+|-------|--------------------------|---------|
+| PPO_30b | 2 (0, 69) | **MEMORIZED** — 99.8% zero-score |
+| PPO_31b | 2 (29, 31) | **MEMORIZED** — all games 31.0 points, 178 frames |
+
+**Both models collapse to fixed scripts without sticky actions.** PPO_31b's 31-point script is particularly revealing: its "low zero-score rate" (2.4% in the 10k eval) is not robustness — it's an artifact of a memorized script that happens to score 31 from every ALE state. PPO_30b's script zeros 99.8% of the time without sticky, explaining its 23.2% zero-score rate even with sticky (sticky noise rescues it from zeros in ~77% of games).
+
+#### Sticky Probability Sweep
+
+Both models evaluated at p ∈ {0.0, 0.05, 0.10, 0.15, 0.20, 0.25}, 500 games each.
+
+| p | PPO_30b uniq | PPO_30b avg | PPO_30b zero% | PPO_31b uniq | PPO_31b avg | PPO_31b zero% |
+|---|-------------|------------|--------------|-------------|------------|--------------|
+| 0.00 | **2** | 0.1 | 99.8% | **2** | 31.0 | 0.0% |
+| 0.05 | **55** | 17.2 | 76.8% | **63** | 27.1 | 0.4% |
+| 0.10 | **90** | 24.6 | 58.6% | **63** | 25.7 | 0.8% |
+| 0.15 | **92** | 28.5 | 40.6% | **65** | 24.9 | 0.6% |
+| 0.20 | **88** | 27.5 | 33.2% | **60** | 23.3 | 1.4% |
+| 0.25 | **88** | 28.5 | 20.0% | **64** | 23.5 | 1.4% |
+
+**At just p=0.05 — 5% action-repeat probability — both models jump from 2 to 55-63 unique scores.** The "GENERALIZING" signal appears at the smallest possible noise level. Unique-score count in sticky environments is primarily a function of sticky probability, not policy reactivity.
+
+PPO_30b's right-tail performance (best=392 at p=0.05) is real — sticky noise unlocks genuine scoring capability from its memorized scripts. PPO_31b's scores are tightly capped (best=78 at p=0.25, P99=67) — sticky noise produces small variations around its 31-point script but reveals very little genuine scoring capability.
+
+#### Variance Decomposition (PPO_30b only)
+
+| Condition | Unique | Avg | Median | Zero% | P99 |
+|-----------|--------|-----|--------|-------|-----|
+| det=True, sticky=0.25 | 93 | 30.1 | 23 | 18.8% | 278 |
+| det=False, sticky=0.25 | 84 | 26.6 | 21 | 15.6% | 106 |
+| det=True, sticky=0.0 | **2** | 0.1 | 0 | 99.8% | 0 |
+| det=False, sticky=0.0 | **43** | 23.5 | 0 | 60.4% | 88 |
+
+**Key finding: With stochastic sampling (det=False) but NO sticky actions, PPO_30b produces 43 unique scores and averages 23.5 — dramatically better than the deterministic collapse (2 unique, 0.1 avg).** The policy has non-zero action entropy — it has learned action preferences that stochastic sampling can exploit. The argmax decision rule (deterministic=True) produces the memorized-collapse behavior; the policy itself is not completely dead. Sticky noise and policy stochasticity are alternative ways to escape the memorized attractor, producing different score distributions.
+
+#### Revised Conclusions for Experiment 3
+
+1. **Both PPO_30b and PPO_31b are memorized policies.** The Phase 2 "GENERALIZING" verdicts were sticky-action noise, not genuine reactive behavior. This is confirmed by: (a) nosticky collapse to ≤2 unique scores, (b) calibration showing the noise baseline matches observed unique-score counts, and (c) the sticky sweep showing the "generalization" signal appears at p=0.05.
+
+2. **The "trade-off" between pretraining duration and sticky steps is a trade-off between which memorized script each model learned.** PPO_30b's script produces zeros 99.8% of the time but contains latent high-score trajectories that sticky noise occasionally unlocks. PPO_31b's script produces 31 points reliably but has very limited upside. The trade-off is real but the mechanism is different from what was originally concluded.
+
+3. **The policies are not completely dead.** Stochastic sampling (det=False) reveals the policies have learnable action preferences that the argmax decision rule suppresses. This is an important nuance: the collapse is in the argmax, not in the policy's learned distribution.
+
+4. **The MemorizationCheckCallback threshold (≤2 unique scores) is valid for non-sticky environments but meaningless for sticky environments.** The calibrated threshold would need to be >14 unique scores for p=0.25, and different sticky probabilities require different thresholds.
+
+5. **PPO_26 and PPO_27 are both CONFIRMED non-generalizing (2026-07-14).** Nosticky verification of all four sticky-trained models reveals two distinct failure modes: (a) **Script memorization** — non-sticky-pretrained models (PPO_26: 60 pts, PPO_31b: 31 pts, PPO_30b: 0 pts) play fixed deterministic scripts. Deeper pretraining produces higher-scoring scripts but never reactive policies. (b) **Noise coupling** — PPO_27 (p=0.25 from scratch) learned a policy dependent on sticky noise to function; without it, every game is 0 points in 19 frames. Neither training regime produces ball-tracking. **No model in this project has ever genuinely generalized.** This independently confirms Zhang et al. (2018), who found that *"stochasticity could neither prevent deep RL agents from serious overfitting nor detect overfitted agents effectively"* — ConvNets are naturally noise-robust and memorize through sticky perturbations.
 
 ---
 
 ### Reference
 
 - Machado, M. C., Bellemare, M. G., Talvitie, E., Veness, J., Hausknecht, M., & Bowling, M. (2018). *Revisiting the Arcade Learning Environment: Evaluation Protocols and Open Problems for General Agents.* Journal of Artificial Intelligence Research, 61, 523-562.
+- Zhang, C., Vinyals, O., Munos, R., & Bengio, S. (2018). *A Study on Overfitting in Deep Reinforcement Learning.* arXiv:1804.06893. — **Key finding:** sticky actions do not prevent memorization in deep ConvNet RL agents; CNNs are naturally noise-robust. This project independently confirmed this across 5 PPO models.
+
+---
+
+### Experiment 3.5: Continue PPO_30b/PPO_31b Past 400M (Considered and Rejected, 2026-07-14)
+
+**Proposal:** Extend both PPO_30b and PPO_31b by 100-200M additional sticky steps (to 500-600M total) to test whether memorization can be escaped with enough sticky training.
+
+**Reasons considered:**
+- 400M was an arbitrary budget — PPO_26 succeeded at ~1.8B total. The memorization→generalization phase transition might require more steps.
+- The sticky sweep showed PPO_30b has residual policy entropy (43 unique scores with det=False, sticky=off) — more training might strengthen alternative action paths.
+- Near-zero marginal cost — scripts exist, checkpoints exist, just resume.
+- Answers a permanent question: can sticky fine-tuning ever rescue a memorized foundation?
+
+**Why rejected:**
+1. **Evidence points to permanent memorization.** Experiment 2 showed sticky removal causes collapse within ~30M steps. Sticky actions prevent collapse but don't build generalization from a memorized base. There's no mechanistic reason to expect more steps changes this dynamic.
+2. **The F-002 confound is permanent.** No amount of additional training can separate pretraining depth from sticky-step count in Experiment 3. Even if both models improve, the attribution remains underdetermined.
+3. **The memorization track shows stability, not progress.** PPO_30b has been in the 10-19 unique score band for 33 consecutive checks spanning 290M sticky steps. No upward trend. The signal is sticky probability, not policy improvement.
+4. **Calibration is damning.** Both models' 10-19 unique scores are indistinguishable from the dead-policy + noise baseline (8-14 unique, mean 11.3).
+5. **PPO_26 nosticky verification is higher priority.** If PPO_26 also collapses without sticky, the entire "both ingredients" framework needs revision. That single data point changes direction more than another 200M steps on confirmed-memorized models.
+6. **A clean experiment produces cleaner conclusions.** Low-sticky single-phase training (Experiment 4 Option A) tests one variable with no confounds. It's better science.
+
+**Verdict:** REJECTED. Move to Experiment 4 with a clean design.
+
+---
+
+## Experiment 4: Sticky Probability — Single-Phase Training
+
+### Context (Revised 2026-07-14)
+
+The post-hoc analysis of Experiment 3 established three facts that reset the experimental direction:
+
+1. **Non-sticky pretraining causes permanent memorization.** PPO_30a, PPO_31a, PPO_25 — every model trained without sticky actions collapsed to ≤2 unique scores. Phase 2 sticky fine-tuning masks this with noise but does not cure it.
+
+2. **The sticky probability sweep revealed p=0.05 as transformative.** At inference time, just 5% action-repeat probability takes a memorized model from 2 unique scores to 55-63. The "generalization" signal is primarily a function of sticky probability, not policy reactivity.
+
+3. **Full-sticky from scratch (p=0.25, PPO_27) prevents memorization but produces fragility.** PPO_27 had the worst single-env metrics (21.3% zero-score) despite holding the eval record (147.02). Too much stochasticity during training prevents the policy from building reliable skills.
+
+These three facts point to the same unexplored dimension: **sticky probability itself.** Every experiment so far has used only p=0.0 or p=0.25. The intermediate range — where the sticky sweep showed the largest marginal effect — has never been tested during training.
+
+The core question for Experiment 4: **Is there a sticky probability that prevents memorization (like p=0.25) while producing robust single-env policies (unlike p=0.25)?**
+
+### Option A: Low-Sticky Single-Phase Training (RECOMMENDED)
+
+**Design:** Train one model from scratch with `repeat_action_probability=0.05` (or 0.10), single phase, 400M total steps. No pretraining/fine-tuning split. Hyperparameters: n_envs=32, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_coef=0.006.
+
+**Hypothesis:** p=0.05 provides enough stochasticity to prevent deterministic script formation (unlike p=0.0) but not so much that the policy fails to build reliable reactive foundations (unlike p=0.25). This is the Goldilocks hypothesis — the stochasticity sweet spot where the policy *must* learn to react because memorized sequences are unreliably executed, but *can* learn to react because the environment is still mostly predictable.
+
+**Why this is the right next experiment:**
+- **Tests one variable.** Single phase, one sticky probability, no confounded phase transitions. The only thing being tested is "does low-sticky training produce better policies than either extreme?"
+- **The sticky sweep provides a strong prior.** We already know p=0.05 produces behavioral diversity at inference time. The open question is whether training at p=0.05 builds a policy that generalizes under *deterministic* inference.
+- **Simplifies the recipe.** If it works, the two-phase recipe (non-sticky pretrain → sticky fine-tune) is replaced with a single-phase run. That's a significant practical improvement.
+- **PPO_26 nosticky verification can run in parallel on CPU.**
+
+**Comparison groups (all at 400M total steps):**
+| Model | Phase 1 | Phase 2 | Known Issue |
+|-------|---------|---------|-------------|
+| PPO_32 (new) | p=0.05 × 400M | — | Tested here |
+| PPO_30b | p=0.0 × 100M | p=0.25 × 300M | Confirmed memorized + noise |
+| PPO_31b | p=0.0 × 300M | p=0.25 × 100M | Confirmed memorized + noise |
+
+PPO_27 (p=0.25 from scratch, ~1B steps) provides a loose upper bound on full-sticky performance but isn't a matched-total-steps comparison.
+
+**Prediction table:**
+| Outcome | Interpretation |
+|---------|---------------|
+| Nosticky unique scores ≥10 at 400M | Low-sticky training prevented memorization — recipe works |
+| Nosticky unique scores 3-9 at 400M | Partial success — prevents total collapse but doesn't build full reactivity |
+| Nosticky unique scores ≤2 at 400M | p=0.05 is still deterministic enough to allow memorization — need p≥0.10 |
+| Sticky-on performance worse than PPO_30b | Low noise during training produces a weaker policy, even if less memorized |
+| Sticky-on performance better than PPO_30b | Low-sticky is strictly better — prevents memorization AND builds stronger skills |
+
+**Risk:** p=0.05 might still be low enough that the policy can memorize. The sticky sweep showed inference-time diversity at p=0.05, but that's testing a *trained* model through a noise lens — training dynamics at p=0.05 could still converge to deterministic scripts. If this happens, the next step is p=0.10.
+
+**Estimated time:** ~2 weeks for 400M steps.
+
+### Option B: Two-Model Sticky Probability Comparison
+
+**Design:** Train two models from scratch: PPO_32 at p=0.05, PPO_33 at p=0.25. Both single-phase, both 400M total steps, identical hyperparameters. Direct head-to-head comparison of the only variable that matters: sticky probability.
+
+**Why this is stronger than Option A:**
+- Directly answers "does low-sticky beat full-sticky?" with matched total steps
+- Controls for everything except sticky probability
+- PPO_33 (p=0.25 from scratch at 400M) fills a missing data point — we have no full-sticky model at this budget
+
+**Why this is weaker:**
+- **2× the GPU time.** Two models × 400M = ~4 weeks sequential, or train PPO_33 on a second machine.
+- PPO_27 (p=0.25 from scratch) already exists at higher step counts — we have a rough idea what full-sticky looks like.
+- The most novel question is whether low-sticky works at all — Option A answers that first. If p=0.05 also memorizes, there's no point comparing it to p=0.25.
+
+**Estimated time:** ~4 weeks sequential, ~2 weeks if both can run in parallel.
+
+### Option C: Curriculum Sticky — Progressive Probability Increase
+
+**Design:** Single model, single phase, but sticky probability increases with training progress:
+- 0-100M steps: p=0.05
+- 100M-200M steps: p=0.10
+- 200M-400M steps: p=0.25
+
+**Hypothesis:** The policy builds robust reactive foundations during the low-noise early phase (when it's learning basic paddle control and ball tracking), then adapts to increasing stochasticity as skills consolidate. This mirrors the non-sticky→sticky two-phase structure but replaces memorization-inducing p=0.0 with memorization-resistant p=0.05.
+
+**Why this is interesting:**
+- Addresses the concern that p=0.05 throughout might produce a policy that can't handle p=0.25 at inference time
+- Progressive difficulty is a well-established curriculum learning principle
+- The sticky sweep showed p=0.05 → p=0.25 is a smooth transition in behavioral diversity
+
+**Why this is weaker than Option A:**
+- **Confounds probability with training phase.** If it works, you don't know whether p=0.05 throughout would have worked just as well.
+- More complex implementation (need to modify the env during training, or swap envs at phase boundaries).
+- Tests two things at once: low-sticky early phase AND progressive probability increase.
+
+**Estimated time:** ~2 weeks for 400M steps (same as Option A).
+
+### Option D: PPO_26 Nosticky Verification First
+
+**Design:** Before launching any new training, run `funnel_recorder_ppo_26_nosticky.py` — 500 games with sticky=off, persistent env, seed=None. Tests whether PPO_26 (avg 54.3, 0% zero-score) is genuinely generalizing or is also a memorized policy + sticky noise.
+
+**Why this might change everything:**
+- If PPO_26 IS memorized: the best model in the project is also noise-masked. The entire "both ingredients" framework collapses. The experimental direction pivots to "what actually prevents memorization?" rather than "how do we optimize the two-ingredient recipe?"
+- If PPO_26 IS generalizing: we have a proven recipe (838M non-sticky + 1B sticky) that works. Experiment 4 should attempt to replicate it at smaller scale or with cleaner controls.
+
+**This is not mutually exclusive with Options A-C.** It runs on CPU while the GPU trains. But the result is so consequential that it makes sense to get it before committing to a 2-week training run.
+
+**Estimated time:** ~1-2 hours (CPU only, 500 games).
+
+### Recommendation
+
+**Do Option D + Option A in parallel.** PPO_26 nosticky verification runs on CPU (hours). PPO_32 (p=0.05 single-phase) trains on GPU (~2 weeks). Neither blocks the other.
+
+If PPO_26 nosticky confirms generalization, Option A still answers the important question of whether a simpler single-phase recipe can work. If PPO_26 nosticky reveals memorization, Option A becomes even more important — it tests the leading candidate for a recipe that actually prevents memorization.
+
+**Don't do Options B or C yet.** Option B (two-model comparison) is premature until we know whether low-sticky works at all. Option C (curriculum) confounds two variables and should only be attempted if Option A shows partial success (e.g., nosticky unique scores of 3-9 — not memorized but not fully generalizing).
+
+### Measurement Protocol (for Experiment 4)
+
+1. **MemorizationCheckCallback throughout training** — every 10M steps, 20 games, sticky OFF (so the verdict is actually meaningful). The calibration data now lets us interpret the results correctly.
+2. **At 200M midpoint:** Run 500-game nosticky eval. If the model is already memorized (≤2 unique), we know early and can abort or adjust.
+3. **At 400M completion:**
+   - 10k-game single-env eval, sticky on (gold standard)
+   - 10k-game single-env eval, sticky off (memorization verification)
+   - 500-game eval at p=0.05, p=0.10, p=0.15, p=0.20 (sensitivity sweep)
+   - Both deterministic and stochastic inference at each sticky level
+4. **Compare against PPO_30b and PPO_31b** at matched 400M total steps
+5. **Compute bootstrap CIs** on all mean/median/zero-score comparisons
+6. **Update FLAWS.md** with any new issues discovered
+
+---
+
+## Experiment 5: Dynamics Randomization — Breaking Memorization Through Unpredictable Physics
+
+**Status: DESIGNING (2026-07-14).** PPO_32 (Experiment 4) still training — results will determine whether Experiment 5 is needed and which direction it takes.
+
+### Motivation
+
+The central finding from Experiments 1-3: **no model in this project has ever genuinely generalized.** Every sticky-trained model tested without sticky actions collapsed to a deterministic script (PPO_26: 60 pts, PPO_31b: 31 pts, PPO_30b: 0 pts) or a noise-dependent degenerate policy (PPO_27: 100% zeros). Sticky actions do not prevent memorization — they mask it.
+
+The root cause, per Zhang et al. (2018) and independently confirmed here: **CNNs are naturally robust to action-level perturbations.** Translation invariance is built into convolutional architectures. A 25% chance of action-repeat doesn't disrupt a memorized trajectory enough — the CNN's feature representations are smooth, and the noisy frame sequence maps to the same features as the clean one.
+
+### The Design Insight (RL_REFERENCE.md Lesson #40)
+
+Sticky actions perturb the **agent's output** (action choice). What matters for forcing reactivity is perturbing the **environment's dynamics** — the physics the agent must respond to.
+
+- **Perceptual perturbations** (data augmentation, observation noise): CNNs are built to be robust to these. The pixel pattern changes, but the feature representation doesn't. The agent learns to see through the noise and arrives at the same memorizable features.
+- **Dynamics perturbations** (variable ball speed, variable paddle width, variable frame skip): the ball is literally in a different place than a timed script expects. No amount of CNN invariance can compensate — the agent MUST observe and react.
+
+This is domain randomization, the standard sim-to-real technique: randomize simulator parameters during training so the policy learns features that generalize across parameter ranges. Applied to Breakout: randomize the physics parameters a memorized script depends on, and the policy must develop ball-tracking because no fixed timed sequence works across all parameter values.
+
+Later Breakout-style games (powerups, speed changes, challenge modes) implicitly use this principle — what was once a game-design feature is also a memorization countermeasure.
+
+### Dependency Chain
+
+```
+PPO_32 finishes (p=0.05 from scratch)
+├─ Generalizes? → DONE. Goldilocks hypothesis confirmed.
+└─ Memorized? → Continue to Experiment 5
+
+Experiment 5 Option A: Frame Skip Randomization (~1 week)
+├─ Generalizes? → DONE. Cheap fix works.
+└─ Memorized? → Continue to Option B
+
+Experiment 5 Option B: RAM-Parameterized Physics (~2-3 weeks)
+├─ Generalizes? → DONE. Domain randomization confirmed.
+└─ Memorized? → Experiment 5 Option C: Custom ROM or PyGame clone
+```
+
+Each step is gated on the previous one's failure. No point building the complex solution if the simple one works.
+
+### Technical Foundation: What CAN Be Randomized
+
+#### Available Right Now (no ROM modification)
+
+**Frame skip randomization** — apply the agent's action for a random number of ALE frames (e.g., 2-8 frames) rather than a fixed 4. This varies:
+- **Effective ball speed**: 2-frame skip = ball moves 2 pixels per decision; 8-frame skip = ball moves 8 pixels — effectively 4× faster
+- **Effective paddle responsiveness**: 2 frames of LEFT = paddle moves 2 pixels; 8 frames = 8 pixels — paddle moves further per decision
+
+A wrapper implementation is ~30 lines:
+
+```python
+class RandomFrameSkip(gym.Wrapper):
+    def __init__(self, env, min_frames=2, max_frames=8):
+        super().__init__(env)
+        self.min = min_frames
+        self.max = max_frames
+    
+    def step(self, action):
+        k = np.random.randint(self.min, self.max + 1)
+        total_reward = 0
+        for _ in range(k):
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+            if terminated or truncated:
+                break
+        return obs, total_reward, terminated, truncated, info
+```
+
+Cumulative position uncertainty: after 100 agent decisions at frameskip 2-8, ball position uncertainty is ~±300 pixels — far beyond what any timed script can accommodate.
+
+**Limitation:** Frame skip randomization changes the *pace* of the game, not its fundamental invariants. Reflection angles, brick layout, and paddle-to-ball speed ratio remain constant. The agent might learn a speed-conditioned script (detect speed from first few frames, select from a small lookup table of speed-appropriate timed sequences) rather than genuine ball-tracking.
+
+#### Requires Investigation (ALE RAM manipulation)
+
+The project has confirmed these RAM addresses (RL_REFERENCE.md Part 2):
+
+| Address | Value | Range |
+|---------|-------|-------|
+| 70 | Paddle x position | 0-191 |
+| 72 | Ball x position | 0-191 |
+| 90 | Ball y position | increments each step |
+
+`env.unwrapped.ale.setRAM(address, value)` can write to any of the 128 bytes of Atari 2600 RAM. But many game parameters are not stored in RAM — they're in the ROM code and TIA hardware registers.
+
+**Paddle width:** Controlled by the TIA NUSIZx register (Number-Size). Standard Breakout uses an 8-pixel-wide player sprite. NUSIZ can double (16px) or quadruple (32px) it. The ROM *may* cache this value in a RAM variable before writing it to the TIA each frame — if so, `setRAM()` works. If the ROM loads it as an immediate constant (`LDA #$05; STA NUSIZ0`), it's not writable without ROM modification. Unknown without disassembly inspection.
+
+**Ball speed:** Determined by ROM code that moves the ball object every N frames. If the speed divider is stored in RAM (some games do this for progressive difficulty), it's modifiable. If hardcoded (likely for Breakout's simple design), it's not. Unknown.
+
+**Ball size:** The ball is typically a missile sprite (1-8 pixels wide). Its size, like the paddle, is controlled by TIA registers. Same uncertainty as paddle width.
+
+**Paddle speed:** The paddle moves based on joystick input polling each frame. Speed is effectively 1 pixel per frame. To vary it, we'd need to vary the frameskip — which is what Option A does.
+
+**Proposed investigation:** A probe script that dumps all 128 RAM bytes every frame during gameplay and identifies which bytes correlate with which game parameters. This has been partially done for paddle_x/ball_x/ball_y (addresses 70/72/90), but we should systematically identify the remaining addresses. This is a few hours of work that pays off by telling us what's actually possible.
+
+#### Fallbacks If RAM Manipulation is Insufficient
+
+1. **Custom ROM:** The Atari homebrew community has tools for modifying 2600 ROMs. A "Breakout with variable paddle width" ROM could be created by patching the NUSIZ constant in the original ROM. This is more work but gives full control.
+2. **PyGame Breakout clone:** Full control over every physics parameter. Zero literature comparability but maximum experimental flexibility. Best as a separate project if ALE-level approaches are exhausted.
+
+### Measurement Protocol
+
+Every Experiment 5 variant uses the same verification:
+
+1. **Pre-training probe:** If pursuing RAM manipulation, run a probe script to catalog all accessible game parameters
+2. **During training:** MemorizationCheckCallback every 10M steps, sticky OFF (verdict now validated for non-sticky environments)
+3. **At completion:**
+   - 10k-game eval with sticky OFF (nosticky verification — the only reliable behavioral test)
+   - 10k-game eval with sticky ON at p=0.25 (for literature comparability)
+   - Both deterministic and stochastic inference
+4. **Control:** Compare against PPO_26 (best memorized script, 60 pts nosticky) — even a reactive policy scoring 40 pts genuinely beats a script scoring 60
+5. **Nosticky ≤2 unique scores = MEMORIZED** regardless of sticky-on performance
+
+### Prediction Table
+
+| Training | Nosticky result | Interpretation |
+|----------|----------------|----------------|
+| Frame skip 2-8 | ≥10 unique, varied scores | Frame skip randomization forces reactivity. Cheap fix confirmed. |
+| Frame skip 2-8 | ≤2 unique, one script | Speed-conditioned scripts beat frame skip. Move to Option B. |
+| RAM-parameter paddle width | ≥10 unique, varied scores | Domain randomization confirmed. Parameter sweep next. |
+| RAM-parameter paddle width | ≤2 unique, one script | Even physics randomization > perceptual randomization alone, but the CNN finds a way. Consider multi-parameter randomization or custom ROM. |
+| Multi-parameter (width + speed) | ≤2 unique | The CNN's memorization capacity exceeds expectations at every turn. Investigate network architecture changes (dropout, smaller CNN) combined with dynamics randomization. |
+
+### Open Questions
+
+1. **Does the agent detect frame skip from a single observation?** If the ball hasn't moved yet in the first frame after reset, can the agent infer "this is a slow-speed episode" from visual cues alone? If so, it can select a speed-matched script rather than tracking.
+2. **Is dynamics randomization enough, or do we need perceptual randomization too?** The ideal solution likely combines both: the agent can't memorize pixels AND can't memorize timed sequences. But one variable at a time — test dynamics first.
+3. **What RAM addresses actually exist for Breakout physics parameters?** The probe script needs to happen before committing to Option B. Don't design around capabilities we haven't confirmed.
+4. **Is there already a "variable Breakout" ROM?** The homebrew community has been hacking Atari games for 40+ years. Worth searching before building our own.

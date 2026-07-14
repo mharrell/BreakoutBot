@@ -1,12 +1,7 @@
 """
-Funnel recorder for PPO_31b — sticky Phase 2 model (100M non-sticky + 300M sticky).
+Funnel recorder for PPO_31b — sticky Phase 2 model (300M non-sticky + 100M sticky).
 Standard approach: persistent env, seed=None, sticky actions provide natural
 game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
-
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
 """
 import ale_py
 import gymnasium as gym
@@ -25,7 +20,7 @@ gym.register_envs(ale_py)
 
 RUN_NAME = "PPO_31b"
 STICKY_ACTIONS = True
-MODEL_PATH = f"models/{RUN_NAME}/best_model"
+MODEL_PATH = f"models/{RUN_NAME}/final_model"
 
 FUNNEL_THRESHOLD = 400
 NUM_GAMES = 10000

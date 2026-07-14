@@ -1,12 +1,16 @@
 """
-Funnel recorder for PPO_30b — sticky Phase 2 model (100M non-sticky + 300M sticky).
-Standard approach: persistent env, seed=None, sticky actions provide natural
-game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
+Funnel recorder for PPO_26 — sticky-OFF verification (nosticky check).
+Tests whether PPO_26 (avg 54.3, 0% zero-score, 0.07% funnel at 10k games
+with sticky on) is genuinely generalizing or is also a memorized policy
+masked by sticky-action noise.
 
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
+This is the highest-priority pending verification task. PPO_26 has NEVER
+been evaluated without sticky actions. Its strong single-env performance
+may be:
+  (a) Real generalization — 838M non-sticky + ~1B sticky built a reactive policy
+  (b) Memorized script + noise — like PPO_30b/31b but with a much better script
+
+500 games, sticky off, persistent env, seed=None, deterministic=True.
 """
 import ale_py
 import gymnasium as gym
@@ -23,12 +27,12 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_30b"
-STICKY_ACTIONS = True
-MODEL_PATH = f"models/{RUN_NAME}/final_model"
+RUN_NAME = "PPO_26_nosticky"
+STICKY_ACTIONS = False
+MODEL_PATH = f"models/PPO_26/final_model"
 
 FUNNEL_THRESHOLD = 400
-NUM_GAMES = 10000
+NUM_GAMES = 500
 OUTPUT_DIR = "recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60
@@ -92,7 +96,9 @@ game_start_time = time.time()
 print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Threshold: {FUNNEL_THRESHOLD} | "
       f"Cap: {NUM_GAMES}")
 print(f"Per-game log: {LOG_PATH}")
-print(f"Compare results against: PPO_26 (avg 54.3, 0.0% zero-score, 0.07% funnel)")
+print(f"PPO_26 sticky-ON baseline: avg 54.3, 0.0% zero-score, 0.07% funnel (10k games)")
+print(f"If PPO_26 is memorized: expect <=2 unique scores without sticky")
+print(f"If PPO_26 generalizes: expect >=10 unique scores without sticky")
 print("-" * 60)
 
 while episode <= NUM_GAMES:
@@ -147,11 +153,18 @@ log_file.close()
 
 print("-" * 60)
 print(f"--- Final Results: {RUN_NAME} ({len(scores)} games) ---")
-print(f"Average Score:    {sum(scores)/len(scores):.1f}  (PPO_26: 54.3)")
+print(f"Average Score:    {sum(scores)/len(scores):.1f}")
 print(f"Best Score:       {max(scores):.1f}")
 print(f"Worst Score:      {min(scores):.1f}")
+unique_scores = len(set(scores))
+print(f"Unique Scores:    {unique_scores}  (<={'=' if unique_scores <= 2 else '>' not in '='} 2 = {'MEMORIZED' if unique_scores <= 2 else 'NOT MEMORIZED'})")
 zero_count = sum(1 for s in scores if s == 0)
-print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)  "
-      f"(PPO_26: 0.0%, PPO_25: 20.0%)")
+print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)")
 print(f"Funnel Rate ({FUNNEL_THRESHOLD}+ pts): {funnel_count}/{len(scores)} "
-      f"({100*funnel_count/len(scores):.2f}%)  (PPO_26: 0.07%)")
+      f"({100*funnel_count/len(scores):.2f}%)")
+print()
+print("PPO_26 sticky-ON baseline (10k games): avg 54.3, 0.0% zero-score, 0.07% funnel")
+if unique_scores <= 2:
+    print("*** VERDICT: PPO_26 is MEMORIZED — sticky-on performance was noise-masked ***")
+else:
+    print(f"VERDICT: PPO_26 shows {unique_scores} unique scores without sticky — generalization confirmed")

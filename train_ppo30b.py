@@ -36,96 +36,99 @@ def get_latest_checkpoint(path):
         return None
     return max(checkpoints, key=os.path.getmtime)
 
-# Sticky actions on for Phase 2
-env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=None,
-                     env_kwargs={"repeat_action_probability": 0.25})
-env = VecFrameStack(env, n_stack=4)
-env = BrickCountingVecWrapper(env)
 
-eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
-                          env_kwargs={"repeat_action_probability": 0.25})
-eval_env = VecFrameStack(eval_env, n_stack=4)
+if __name__ == "__main__":
 
-eval_callback = EvalCallback(
-    eval_env,
-    best_model_save_path=f"./models/{RUN_NAME}",
-    log_path=f"./logs/{RUN_NAME}",
-    eval_freq=50_000,
-    n_eval_episodes=50,
-    deterministic=True,
-    render=False,
-    verbose=1,
-)
+    # Sticky actions on for Phase 2
+    env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=None,
+                         env_kwargs={"repeat_action_probability": 0.25})
+    env = VecFrameStack(env, n_stack=4)
+    env = BrickCountingVecWrapper(env)
 
-checkpoint_callback = CheckpointCallback(
-    save_freq=100_000,
-    save_path=CHECKPOINT_PATH,
-    name_prefix="latest_checkpoint",
-    save_replay_buffer=False,
-    verbose=1,
-)
+    eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
+                              env_kwargs={"repeat_action_probability": 0.25})
+    eval_env = VecFrameStack(eval_env, n_stack=4)
 
-# Periodic in-memory check for behavioral collapse to a fixed action
-# sequence. sticky_actions=True here matches this script's Phase 2 config —
-# important for this run specifically: this is exactly the phase transition
-# where PPO_28/29 collapsed (going the other direction, sticky-to-off), so
-# confirming this phase maintains or restores variance is the central
-# question Experiment 3 is testing.
-memorization_callback = MemorizationCheckCallback(
-    run_name=RUN_NAME,
-    sticky_actions=True,
-    check_freq=10_000_000,
-    n_games=20,
-    summary_lines=[
-        "PPO_30b — Phase 2 of Experiment 3 (sticky after short pretraining)",
-        "Sticky on, 32 envs, loaded from PPO_30a/final_model, target 400M total (300M sticky)",
-        "LR 1e-4→1e-5, clip 0.15→0.05, ent_coef=0.006, batch_size=1024",
-        "Tests hypothesis A: is 100M non-sticky pretraining enough?",
-    ],
-)
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path=f"./models/{RUN_NAME}",
+        log_path=f"./logs/{RUN_NAME}",
+        eval_freq=50_000,
+        n_eval_episodes=50,
+        deterministic=True,
+        render=False,
+        verbose=1,
+    )
 
-callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, BrickRolloutCallback()])
+    checkpoint_callback = CheckpointCallback(
+        save_freq=100_000,
+        save_path=CHECKPOINT_PATH,
+        name_prefix="latest_checkpoint",
+        save_replay_buffer=False,
+        verbose=1,
+    )
 
-resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
+    # Periodic in-memory check for behavioral collapse to a fixed action
+    # sequence. sticky_actions=True here matches this script's Phase 2 config —
+    # important for this run specifically: this is exactly the phase transition
+    # where PPO_28/29 collapsed (going the other direction, sticky-to-off), so
+    # confirming this phase maintains or restores variance is the central
+    # question Experiment 3 is testing.
+    memorization_callback = MemorizationCheckCallback(
+        run_name=RUN_NAME,
+        sticky_actions=True,
+        check_freq=10_000_000,
+        n_games=20,
+        summary_lines=[
+            "PPO_30b — Phase 2 of Experiment 3 (sticky after short pretraining)",
+            "Sticky on, 32 envs, loaded from PPO_30a/final_model, target 400M total (300M sticky)",
+            "LR 1e-4→1e-5, clip 0.15→0.05, ent_coef=0.006, batch_size=1024",
+            "Tests hypothesis A: is 100M non-sticky pretraining enough?",
+        ],
+    )
 
-if resume_path:
-    print(f"Resuming {RUN_NAME} from checkpoint {resume_path}...")
-    model = PPO.load(resume_path, env=env, device="cuda")
-    reset_num_timesteps = False
-else:
-    if not os.path.exists(SOURCE_MODEL + ".zip"):
-        raise FileNotFoundError(
-            f"Source model not found at {SOURCE_MODEL}.zip\n"
-            f"Make sure train_ppo30a.py has completed before running this script."
-        )
-    print(f"Starting {RUN_NAME} from {SOURCE_MODEL} with sticky actions added...")
-    model = PPO.load(SOURCE_MODEL, env=env, device="cuda",
-                     custom_objects={"n_envs": 32})
+    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, BrickRolloutCallback()])
 
-    # Mid-range LR restart — deliberately conservative.
-    # PPO_28/29 restarted from 2.5e-4 (full high LR) and collapsed in ~30M steps.
-    # Starting at 1e-4 gives the policy room to adapt without being pushed hard
-    # enough to discover memorization attractors before stickiness can suppress them.
-    model.learning_rate = linear_schedule(1e-4, 1e-5)
-    model.clip_range = linear_schedule(0.15, 0.05)
-    model.ent_coef = 0.006
-    model.tensorboard_log = f"./tensorboard/{RUN_NAME}"
-    reset_num_timesteps = False  # preserve step count from Phase 1
+    resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
-# Absolute step target — safe across restarts
-remaining = ABSOLUTE_TARGET - model.num_timesteps
-print(f"{RUN_NAME}: current step {model.num_timesteps:,}, "
-      f"training {remaining:,} more steps to reach {ABSOLUTE_TARGET:,}")
+    if resume_path:
+        print(f"Resuming {RUN_NAME} from checkpoint {resume_path}...")
+        model = PPO.load(resume_path, env=env, device="cuda")
+        reset_num_timesteps = False
+    else:
+        if not os.path.exists(SOURCE_MODEL + ".zip"):
+            raise FileNotFoundError(
+                f"Source model not found at {SOURCE_MODEL}.zip\n"
+                f"Make sure train_ppo30a.py has completed before running this script."
+            )
+        print(f"Starting {RUN_NAME} from {SOURCE_MODEL} with sticky actions added...")
+        model = PPO.load(SOURCE_MODEL, env=env, device="cuda",
+                         custom_objects={"n_envs": 32})
 
-model.learn(
-    total_timesteps=remaining,
-    callback=callbacks,
-    reset_num_timesteps=reset_num_timesteps,
-    tb_log_name=RUN_NAME,
-)
+        # Mid-range LR restart — deliberately conservative.
+        # PPO_28/29 restarted from 2.5e-4 (full high LR) and collapsed in ~30M steps.
+        # Starting at 1e-4 gives the policy room to adapt without being pushed hard
+        # enough to discover memorization attractors before stickiness can suppress them.
+        model.learning_rate = linear_schedule(1e-4, 1e-5)
+        model.clip_range = linear_schedule(0.15, 0.05)
+        model.ent_coef = 0.006
+        model.tensorboard_log = f"./tensorboard/{RUN_NAME}"
+        reset_num_timesteps = False  # preserve step count from Phase 1
 
-model.save(f"./models/{RUN_NAME}/final_model")
-print(f"\n{RUN_NAME} Phase 2 complete at {model.num_timesteps:,} total steps.")
-print(f"Run funnel_recorder_ppo_30b.py to evaluate single-env performance.")
-env.close()
-eval_env.close()
+    # Absolute step target — safe across restarts
+    remaining = ABSOLUTE_TARGET - model.num_timesteps
+    print(f"{RUN_NAME}: current step {model.num_timesteps:,}, "
+          f"training {remaining:,} more steps to reach {ABSOLUTE_TARGET:,}")
+
+    model.learn(
+        total_timesteps=remaining,
+        callback=callbacks,
+        reset_num_timesteps=reset_num_timesteps,
+        tb_log_name=RUN_NAME,
+    )
+
+    model.save(f"./models/{RUN_NAME}/final_model")
+    print(f"\n{RUN_NAME} Phase 2 complete at {model.num_timesteps:,} total steps.")
+    print(f"Run funnel_recorder_ppo_30b.py to evaluate single-env performance.")
+    env.close()
+    eval_env.close()

@@ -24,65 +24,68 @@ def get_latest_checkpoint(path):
         return None
     return max(checkpoints, key=os.path.getmtime)
 
-env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=None,
-                     env_kwargs={"repeat_action_probability": 0.0})
-env = VecFrameStack(env, n_stack=4)
 
-eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
-                          env_kwargs={"repeat_action_probability": 0.0})
-eval_env = VecFrameStack(eval_env, n_stack=4)
+if __name__ == "__main__":
 
-eval_callback = EvalCallback(
-    eval_env,
-    best_model_save_path=f"./models/{RUN_NAME}",
-    log_path=f"./logs/{RUN_NAME}",
-    eval_freq=50_000,
-    n_eval_episodes=50,
-    deterministic=True,
-    render=False,
-    verbose=1,
-)
+    env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=None,
+                         env_kwargs={"repeat_action_probability": 0.0})
+    env = VecFrameStack(env, n_stack=4)
 
-checkpoint_callback = CheckpointCallback(
-    save_freq=100_000,
-    save_path=CHECKPOINT_PATH,
-    name_prefix="latest_checkpoint",
-    save_replay_buffer=False,
-    verbose=1,
-)
+    eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
+                              env_kwargs={"repeat_action_probability": 0.0})
+    eval_env = VecFrameStack(eval_env, n_stack=4)
 
-callbacks = CallbackList([eval_callback, checkpoint_callback])
+    eval_callback = EvalCallback(
+        eval_env,
+        best_model_save_path=f"./models/{RUN_NAME}",
+        log_path=f"./logs/{RUN_NAME}",
+        eval_freq=50_000,
+        n_eval_episodes=50,
+        deterministic=True,
+        render=False,
+        verbose=1,
+    )
 
-# Resume from PPO_28 checkpoint if it exists (previously interrupted)
-resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
+    checkpoint_callback = CheckpointCallback(
+        save_freq=100_000,
+        save_path=CHECKPOINT_PATH,
+        name_prefix="latest_checkpoint",
+        save_replay_buffer=False,
+        verbose=1,
+    )
 
-if resume_path:
-    print(f"Resuming {RUN_NAME} from {resume_path}...")
-    model = PPO.load(resume_path, env=env, device="cuda")
+    callbacks = CallbackList([eval_callback, checkpoint_callback])
 
-else:
-    # First run: load from BASE_MODEL with sticky removed
-    base_path = f"./models/{BASE_MODEL}/best_model"
-    print(f"Starting {RUN_NAME} from {base_path} with sticky actions removed...")
-    model = PPO.load(base_path, env=env, device="cuda",
-                     custom_objects={"n_envs": 32})
-    # Restart the learning rate schedule from the start
-    model.learning_rate = linear_schedule(2.5e-4, 1e-5)
-    model.clip_range = linear_schedule(0.2, 0.05)
-    model.ent_coef = 0.006
+    # Resume from PPO_28 checkpoint if it exists (previously interrupted)
+    resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
-# Corrected continuation: always train exactly ADDITIONAL_STEPS more
-TARGET = model.num_timesteps + ADDITIONAL_STEPS
-remaining = TARGET - model.num_timesteps
+    if resume_path:
+        print(f"Resuming {RUN_NAME} from {resume_path}...")
+        model = PPO.load(resume_path, env=env, device="cuda")
 
-print(f"{RUN_NAME}: current step {model.num_timesteps}, training {remaining} more steps to reach {TARGET}")
+    else:
+        # First run: load from BASE_MODEL with sticky removed
+        base_path = f"./models/{BASE_MODEL}/best_model"
+        print(f"Starting {RUN_NAME} from {base_path} with sticky actions removed...")
+        model = PPO.load(base_path, env=env, device="cuda",
+                         custom_objects={"n_envs": 32})
+        # Restart the learning rate schedule from the start
+        model.learning_rate = linear_schedule(2.5e-4, 1e-5)
+        model.clip_range = linear_schedule(0.2, 0.05)
+        model.ent_coef = 0.006
 
-model.learn(
-    total_timesteps=remaining,
-    callback=callbacks,
-    reset_num_timesteps=False,
-    tb_log_name=RUN_NAME,
-)
+    # Corrected continuation: always train exactly ADDITIONAL_STEPS more
+    TARGET = model.num_timesteps + ADDITIONAL_STEPS
+    remaining = TARGET - model.num_timesteps
 
-model.save(f"./models/{RUN_NAME}/final_model")
-env.close()
+    print(f"{RUN_NAME}: current step {model.num_timesteps}, training {remaining} more steps to reach {TARGET}")
+
+    model.learn(
+        total_timesteps=remaining,
+        callback=callbacks,
+        reset_num_timesteps=False,
+        tb_log_name=RUN_NAME,
+    )
+
+    model.save(f"./models/{RUN_NAME}/final_model")
+    env.close()

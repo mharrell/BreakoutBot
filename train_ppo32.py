@@ -1,12 +1,24 @@
 """
-PPO_31a — Phase 1 of Experiment 3 (long non-sticky pretraining)
-No sticky actions. Trains for 300M steps from scratch.
-When complete, PPO_31b loads this checkpoint and adds sticky actions for 100M.
-Total: 300M non-sticky + 100M sticky = 400M (matching PPO_30's 400M cap).
+PPO_32 — Experiment 4: Low-Sticky Single-Phase Training
+Trains from scratch with repeat_action_probability=0.05 for 400M steps.
+Single phase — no pretraining/fine-tuning split, no confounded phase transitions.
 
-Part of the non-sticky pretraining duration sweep:
-  PPO_30: 100M non-sticky → 300M sticky (tests "basic competency is enough" hypothesis)
-  PPO_31: 300M non-sticky → 100M sticky (tests "depth matters" hypothesis)
+Hypothesis: p=0.05 provides enough stochasticity to prevent deterministic script
+formation (unlike p=0.0, which produces memorized policies in every case) but not
+so much noise that the policy fails to build reliable reactive foundations (unlike
+p=0.25 from scratch, which produced PPO_27's 21% zero-score rate).
+
+Comparison groups (all at 400M total steps):
+  PPO_32: p=0.05 x 400M (single phase, tested here)
+  PPO_30b: p=0.0 x 100M -> p=0.25 x 300M (confirmed memorized + noise)
+  PPO_31b: p=0.0 x 300M -> p=0.25 x 100M (confirmed memorized + noise)
+
+Key design decision: MemorizationCheckCallback uses sticky_actions=False so
+verdicts are valid (the callback doesn't support p=0.05, and sticky-off is the
+only reliable behavioral test per FLAWS.md F-001). The model trained at p=0.05
+should generalize fine to p=0.0 — the 5% noise gap is small.
+
+See EXPERIMENTS.md Experiment 4 for full design, prediction table, and protocol.
 """
 import os
 import glob
@@ -21,14 +33,17 @@ from brick_counter import BrickCountingVecWrapper, BrickRolloutCallback
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_31a"
-TARGET_STEPS = 300_000_000
+RUN_NAME = "PPO_32"
+TARGET_STEPS = 400_000_000
+STICKY_PROB = 0.05  # the variable being tested — Goldilocks hypothesis
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
+
 
 def linear_schedule(start: float, end: float):
     def schedule(progress_remaining: float) -> float:
         return end + (start - end) * progress_remaining
     return schedule
+
 
 def get_latest_checkpoint(path):
     checkpoints = glob.glob(os.path.join(path, "latest_checkpoint_*_steps.zip"))
@@ -38,15 +53,14 @@ def get_latest_checkpoint(path):
 
 
 if __name__ == "__main__":
-
-    # No sticky actions in Phase 1
+    # Single phase: p=0.05 throughout, both training and eval
     env = make_atari_env("ALE/Breakout-v5", n_envs=32, seed=None,
-                         env_kwargs={"repeat_action_probability": 0.0})
+                         env_kwargs={"repeat_action_probability": STICKY_PROB})
     env = VecFrameStack(env, n_stack=4)
     env = BrickCountingVecWrapper(env)
 
     eval_env = make_atari_env("ALE/Breakout-v5", n_envs=1, seed=None,
-                              env_kwargs={"repeat_action_probability": 0.0})
+                              env_kwargs={"repeat_action_probability": STICKY_PROB})
     eval_env = VecFrameStack(eval_env, n_stack=4)
 
     eval_callback = EvalCallback(
@@ -68,24 +82,23 @@ if __name__ == "__main__":
         verbose=1,
     )
 
-    # Periodic in-memory check for behavioral collapse to a fixed action
-    # sequence — see EXPERIMENTS.md Experiment 2/3. sticky_actions=False here
-    # matches this script's training env config.
+    # Memorization checks use sticky_actions=False so verdicts are valid.
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME,
         sticky_actions=False,
         check_freq=10_000_000,
         n_games=20,
         summary_lines=[
-            "PPO_31a — Phase 1 of Experiment 3 (long non-sticky pretraining)",
-            "Non-sticky, 32 envs, fresh agent, target 300M steps",
-            "LR 2.5e-4→1e-5, clip 0.2→0.05, ent_coef=0.006, batch_size=1024",
-            "Phase 2: PPO_31b adds sticky actions (100M more steps, total 400M)",
-            "Tests hypothesis B: does 300M non-sticky pretraining beat 100M?",
+            "PPO_32 — Experiment 4 (low-sticky single-phase training)",
+            f"p={STICKY_PROB} from scratch, 32 envs, fresh agent, target 400M steps",
+            "LR 2.5e-4->1e-5, clip 0.2->0.05, ent_coef=0.006, batch_size=1024",
+            "Memorization checks run sticky-OFF for valid verdicts (FLAWS.md F-001)",
+            "Tests Goldilocks hypothesis: p=0.05 prevents memorization without causing fragility",
         ],
     )
 
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, BrickRolloutCallback()])
+    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback,
+                              BrickRolloutCallback()])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
@@ -94,7 +107,8 @@ if __name__ == "__main__":
         model = PPO.load(resume_path, env=env, device="cuda")
         reset_num_timesteps = False
     else:
-        print(f"Starting {RUN_NAME} from scratch (no sticky actions)...")
+        print(f"Starting {RUN_NAME} from scratch with repeat_action_probability={STICKY_PROB}...")
+        print("Experiment 4: Low-sticky single-phase training (Goldilocks hypothesis)")
         model = PPO(
             "CnnPolicy",
             env,
@@ -128,7 +142,10 @@ if __name__ == "__main__":
         )
 
     model.save(f"./models/{RUN_NAME}/final_model")
-    print(f"\n{RUN_NAME} Phase 1 complete at {model.num_timesteps:,} steps.")
-    print(f"Next: run train_ppo31b.py to start the sticky-action phase.")
+    print(f"\n{RUN_NAME} complete at {model.num_timesteps:,} total steps.")
+    print("Next steps:")
+    print(f"  1. Run funnel_recorder_ppo_32.py (10k games, sticky on) — gold standard")
+    print(f"  2. Run funnel_recorder_ppo_32_nosticky.py (10k games, sticky off) — memorization verification")
+    print(f"  3. Run sticky probability sweep at p=0.05, 0.10, 0.15, 0.20, 0.25")
     env.close()
     eval_env.close()

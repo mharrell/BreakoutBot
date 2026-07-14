@@ -1,12 +1,11 @@
 """
-Funnel recorder for PPO_30b — sticky Phase 2 model (100M non-sticky + 300M sticky).
-Standard approach: persistent env, seed=None, sticky actions provide natural
-game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
+Funnel recorder for PPO_31b — sticky-OFF verification (Experiment 2 pattern).
+Confirms that removing sticky actions from PPO_31b/final_model causes memorization
+collapse (<=2 unique scores, fixed scripts). Shorter run (500 games) since we only
+need a binary collapse/no-collapse verdict, not precise metrics.
 
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
+Companion to funnel_recorder_ppo_30b_nosticky.py — together these complete the
+Experiment 4 measurement protocol item 2 (sticky-off verification for both models).
 """
 import ale_py
 import gymnasium as gym
@@ -23,12 +22,12 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_30b"
-STICKY_ACTIONS = True
-MODEL_PATH = f"models/{RUN_NAME}/final_model"
+RUN_NAME = "PPO_31b_nosticky"
+STICKY_ACTIONS = False
+MODEL_PATH = f"models/PPO_31b/final_model"
 
 FUNNEL_THRESHOLD = 400
-NUM_GAMES = 10000
+NUM_GAMES = 500
 OUTPUT_DIR = "recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60
@@ -92,7 +91,8 @@ game_start_time = time.time()
 print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Threshold: {FUNNEL_THRESHOLD} | "
       f"Cap: {NUM_GAMES}")
 print(f"Per-game log: {LOG_PATH}")
-print(f"Compare results against: PPO_26 (avg 54.3, 0.0% zero-score, 0.07% funnel)")
+print(f"This is a STICKY-OFF VERIFICATION — PPO_31b should collapse to <=2 unique "
+      f"scores if it was memorized (same pattern as PPO_28/29).")
 print("-" * 60)
 
 while episode <= NUM_GAMES:
@@ -126,10 +126,12 @@ while episode <= NUM_GAMES:
                 if slow_path:
                     print(f"*** SLOW: {slow_path} ***")
 
+            unique_so_far = len(set(scores))
             funnel_rate = f"{funnel_count}/{episode} ({100*funnel_count/episode:.1f}%)"
             print(f"Game {episode:>5} | Score: {real_score:>6.0f} | Avg: {avg:>6.1f} | "
                   f"Best: {best:>6.0f} | Frames: {game_frames:>5} | "
-                  f"Agent FPS: {agent_fps:>5.0f} | Funnels: {funnel_rate}")
+                  f"Agent FPS: {agent_fps:>5.0f} | Unique scores: {unique_so_far} | "
+                  f"Funnels: {funnel_rate}")
 
             log_writer.writerow([episode, real_score, int(is_funnel), game_frames,
                                   round(agent_fps, 1), datetime.now().isoformat()])
@@ -145,13 +147,26 @@ while episode <= NUM_GAMES:
 env.close()
 log_file.close()
 
+unique = len(set(scores))
+verdict = "MEMORIZED (collapse confirmed)" if unique <= 2 else \
+          f"NOT COLLAPSED ({unique} unique scores — unexpected)"
+
 print("-" * 60)
 print(f"--- Final Results: {RUN_NAME} ({len(scores)} games) ---")
-print(f"Average Score:    {sum(scores)/len(scores):.1f}  (PPO_26: 54.3)")
+print(f"Unique scores:    {unique}")
+print(f"Verdict:          {verdict}")
+print(f"Average Score:    {sum(scores)/len(scores):.1f}")
 print(f"Best Score:       {max(scores):.1f}")
 print(f"Worst Score:      {min(scores):.1f}")
 zero_count = sum(1 for s in scores if s == 0)
-print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)  "
-      f"(PPO_26: 0.0%, PPO_25: 20.0%)")
-print(f"Funnel Rate ({FUNNEL_THRESHOLD}+ pts): {funnel_count}/{len(scores)} "
-      f"({100*funnel_count/len(scores):.2f}%)  (PPO_26: 0.07%)")
+print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)")
+
+if unique <= 2:
+    print(f"\n[OK] Expected result: PPO_31b collapses without sticky actions, "
+          f"matching PPO_28/29 pattern.")
+    print(f"  This confirms PPO_31b's sticky-on single-env scores reflect "
+          f"environmental noise + a memorized script, not genuine reactivity.")
+else:
+    print(f"\n[WARNING] UNEXPECTED: PPO_31b did NOT collapse without sticky actions.")
+    print(f"  This would be the first sticky-trained model in this project to "
+          f"survive stickiness removal. Investigate further.")

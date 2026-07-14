@@ -1,12 +1,19 @@
 """
-Funnel recorder for PPO_30b — sticky Phase 2 model (100M non-sticky + 300M sticky).
-Standard approach: persistent env, seed=None, sticky actions provide natural
-game-to-game variation. Full 10,000-game run for matched comparison with PPO_25/26/27.
+Funnel recorder for PPO_32 — sticky-OFF verification (Experiment 4).
+Confirms whether low-sticky single-phase training (p=0.05 from scratch) prevents
+memorization or merely masks it like the Experiment 3 models.
 
-Key metrics to compare against PPO_26 (the current best):
-  - Average score (PPO_26: 54.3)
-  - Zero-score rate (PPO_26: 0.0%)
-  - Funnel rate 400+ (PPO_26: 0.07%)
+Prediction table (from EXPERIMENTS.md Experiment 4):
+  <=2 unique scores: p=0.05 training did NOT prevent memorization — model collapsed
+  3-9 unique scores: Partial success — prevents total collapse but not full reactivity
+  >=10 unique scores: Low-sticky training prevented memorization — recipe works
+
+Comparison baselines (both confirmed memorized without sticky):
+  PPO_30b_nosticky: 2 unique scores (0, 69), 99.8% zero-score
+  PPO_31b_nosticky: 2 unique scores (29, 31), all games 31.0 points in 178 frames
+
+500 games, sticky off, persistent env, seed=None, deterministic=True.
+Usable at 200M midpoint (load checkpoint) and 400M completion (load final_model).
 """
 import ale_py
 import gymnasium as gym
@@ -23,12 +30,12 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_30b"
-STICKY_ACTIONS = True
-MODEL_PATH = f"models/{RUN_NAME}/final_model"
+RUN_NAME = "PPO_32_nosticky"
+STICKY_ACTIONS = False
+MODEL_PATH = f"models/PPO_32/final_model"
 
 FUNNEL_THRESHOLD = 400
-NUM_GAMES = 10000
+NUM_GAMES = 500
 OUTPUT_DIR = "recordings"
 LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 PLAYBACK_FPS = 60
@@ -92,7 +99,11 @@ game_start_time = time.time()
 print(f"Run: {RUN_NAME} | Sticky: {STICKY_ACTIONS} | Threshold: {FUNNEL_THRESHOLD} | "
       f"Cap: {NUM_GAMES}")
 print(f"Per-game log: {LOG_PATH}")
-print(f"Compare results against: PPO_26 (avg 54.3, 0.0% zero-score, 0.07% funnel)")
+print(f"Experiment 4 memorization check: PPO_32 (trained p=0.05) evaluated sticky-off")
+print(f"Baselines (both memorized without sticky):")
+print(f"  PPO_30b_nosticky: 2 unique (0, 69), 99.8% zero-score")
+print(f"  PPO_31b_nosticky: 2 unique (29, 31), all 31.0 pts, 178 frames")
+print(f"Prediction: <=2 unique = MEMORIZED, 3-9 = partial, >=10 = GENERALIZING")
 print("-" * 60)
 
 while episode <= NUM_GAMES:
@@ -147,11 +158,25 @@ log_file.close()
 
 print("-" * 60)
 print(f"--- Final Results: {RUN_NAME} ({len(scores)} games) ---")
-print(f"Average Score:    {sum(scores)/len(scores):.1f}  (PPO_26: 54.3)")
+print(f"Average Score:    {sum(scores)/len(scores):.1f}")
 print(f"Best Score:       {max(scores):.1f}")
 print(f"Worst Score:      {min(scores):.1f}")
+unique_scores = len(set(scores))
 zero_count = sum(1 for s in scores if s == 0)
-print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)  "
-      f"(PPO_26: 0.0%, PPO_25: 20.0%)")
+print(f"Unique Scores:    {unique_scores}")
+print(f"Zero-score games: {zero_count}/{len(scores)} ({100*zero_count/len(scores):.1f}%)")
 print(f"Funnel Rate ({FUNNEL_THRESHOLD}+ pts): {funnel_count}/{len(scores)} "
-      f"({100*funnel_count/len(scores):.2f}%)  (PPO_26: 0.07%)")
+      f"({100*funnel_count/len(scores):.2f}%)")
+print()
+print("Comparison baselines (both memorized):")
+print(f"  PPO_30b_nosticky: 2 unique (0, 69), 99.8% zero-score")
+print(f"  PPO_31b_nosticky: 2 unique (29, 31), all 31.0 pts, 178 frames")
+print()
+if unique_scores <= 2:
+    print("*** VERDICT: PPO_32 is MEMORIZED — low-sticky training did NOT prevent collapse ***")
+elif unique_scores <= 9:
+    print(f"VERDICT: PARTIAL SUCCESS — {unique_scores} unique scores prevents total collapse "
+          f"but does not confirm full generalization")
+else:
+    print(f"VERDICT: GENERALIZING — {unique_scores} unique scores confirms low-sticky "
+          f"training prevents memorization")
