@@ -81,12 +81,12 @@ def make_training_env():
     )
     env = NoopResetEnv(env, noop_max=30)
     env = RandomFrameSkip(env, min_skip=FRAME_SKIP_MIN, max_skip=FRAME_SKIP_MAX)
+    env = Monitor(env)              # BEFORE EpisodicLifeEnv — track per-game, not per-life
     env = EpisodicLifeEnv(env)
     if "FIRE" in env.unwrapped.get_action_meanings():
         env = FireResetEnv(env)
     env = WarpFrame(env, width=84, height=84)
     env = ClipRewardEnv(env)
-    env = Monitor(env)
     return env
 
 
@@ -100,12 +100,12 @@ def make_eval_env():
         repeat_action_probability=0.0,      # no sticky
     )
     env = NoopResetEnv(env, noop_max=30)
+    env = Monitor(env)              # BEFORE EpisodicLifeEnv — track per-game, not per-life
     env = EpisodicLifeEnv(env)
     if "FIRE" in env.unwrapped.get_action_meanings():
         env = FireResetEnv(env)
     env = WarpFrame(env, width=84, height=84)
     env = ClipRewardEnv(env)
-    env = Monitor(env)
     return env
 
 
@@ -150,7 +150,7 @@ if __name__ == "__main__":
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME,
         sticky_actions=False,
-        check_freq=10_000_000,
+        check_freq=1_000_000,
         n_games=20,
         summary_lines=[
             f"PPO_33 — Experiment 5A (frame skip randomization)",

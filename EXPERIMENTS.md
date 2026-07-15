@@ -906,6 +906,19 @@ Every Experiment 5 variant uses the same verification:
 | RAM-parameter paddle width | ≤2 unique, one script | Even physics randomization > perceptual randomization alone, but the CNN finds a way. Consider multi-parameter randomization or custom ROM. |
 | Multi-parameter (width + speed) | ≤2 unique | The CNN's memorization capacity exceeds expectations at every turn. Investigate network architecture changes (dropout, smaller CNN) combined with dynamics randomization. |
 
+### Interim Observation (2026-07-14, ~15M steps)
+
+PPO_33 showed a phase-transition breakthrough between 12.3M and 13.1M steps: `ep_rew_mean` jumped from ~9 to ~90, eval score from 16 to 98, both in under 1M steps. At comparable step counts (~12-15M), PPO_33's eval score (98) nearly doubles PPO_32's (53).
+
+Critically, PPO_33 achieved this WITHOUT the early markers of memorization:
+- `explained_variance` = 0.50 (PPO_32: 0.96 — approaching the 1.0 danger threshold per Lesson #30)
+- `entropy_loss` = -0.79 (PPO_32: -0.29 — much closer to collapse at 0)
+- The value function is still learning and the policy retains exploration entropy
+
+PPO_32 at 12M is already showing the early signatures that preceded memorization in Experiments 1-3: near-maximum EV and collapsing entropy. PPO_33 at 15M looks healthier on both metrics while also scoring higher.
+
+Caveats: the memorization check at 12.8M still returned MEMORIZED (2 unique scores, avg 3.8), but this was pre-breakthrough random play. The 20M check will be the first post-breakthrough behavioral test. And we've been burned by early metrics before (PPO_26, PPO_27). The real question is whether PPO_33 sustains healthy entropy and EV through 400M steps without collapsing.
+
 ### Open Questions
 
 1. **Does the agent detect frame skip from a single observation?** If the ball hasn't moved yet in the first frame after reset, can the agent infer "this is a slow-speed episode" from visual cues alone? If so, it can select a speed-matched script rather than tracking.

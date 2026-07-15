@@ -86,7 +86,7 @@ if __name__ == "__main__":
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME,
         sticky_actions=False,
-        check_freq=10_000_000,
+        check_freq=1_000_000,
         n_games=20,
         summary_lines=[
             "PPO_32 — Experiment 4 (low-sticky single-phase training)",
