@@ -5,7 +5,9 @@
 - **Experiment 2 (COMPLETE):** PPO_28/29 — removed sticky actions from trained models. **Finding:** both collapsed to fixed open-loop action sequences within ~30M steps. Training metrics (EV, value_loss, entropy) lied during collapse. Sticky actions are required at inference time, not just during training.
 - **Experiment 3 (COMPLETE — conclusions overturned by post-hoc analysis):** PPO_30/31 — non-sticky pretraining duration sweep at 400M total budget. **Both models CONFIRMED MEMORIZED.** The Phase 2 "GENERALIZING" verdicts were sticky-action noise — calibration shows a dead policy + p=0.25 sticky produces 8-14 unique scores, matching the observed 10-19 range. Nosticky verification confirms both collapse to ≤2 unique scores. PPO_30b: 2 unique (99.8% zeros). PPO_31b: 2 unique (all 31-point script). The "trade-off" is between which memorized script each learned, not between generalization quality. See Post-Hoc Analysis section below.
 
-**Current priority:** Experiment 4 — PPO_32 (low-sticky single-phase, p=0.05) training on GPU. PPO_26 nosticky verification complete (CONFIRMED MEMORIZED: 60-point script × 500 games). **Experiment 5 (Dynamics Randomization) designed and ready** — will proceed if PPO_32 also memorizes. Dependency chain: frame skip randomization → RAM-parameterized physics → custom ROM (see Experiment 5 section below).
+**BREAKTHROUGH (2026-07-15): PPO_35 — the first non-memorized model in the project.** Continuous mid-game physics changes (Experiment 5C) succeeded where sticky actions, frame skip randomization, and per-episode physics randomization all failed. At 64M steps: 21+ unique eval scores, explained_variance=0.85 (vs 0.93-0.96 for memorized models), eval scores cycling through genuinely different strategies. First evidence that a PPO agent can learn reactive ball-tracking in Breakout.
+
+**Currently training:** PPO_32 (Experiment 4, p=0.05 sticky, 400M target, memorized with boom-bust cycles) and PPO_35 (Experiment 5C, continuous physics randomization, 400M target). See Experiment 5 section below for the full dependency chain that led here.
 
 ## ⚠️ Known Limitations
 
