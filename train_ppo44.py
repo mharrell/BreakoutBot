@@ -1,18 +1,18 @@
-"""
-PPO_44 — ALE Experiment 1: Ball Teleportation via setRAM()
+﻿"""
+PPO_44 â€” ALE Experiment 1: Ball Teleportation via setRAM()
 
 The first experiment in the ALE return. Trains on authentic ALE/Breakout-v5
-with ball teleportation on paddle bounce (30% probability) to force the
+with ball teleportation on paddle bounce (10% probability) to force the
 policy to track the ball rather than memorize a timed script.
 
 Design:
   - Training:  ALE/Breakout-v5 + ALEBreakoutRandomized(teleport_prob=0.30)
-               Ball teleports to random (X,Y) on 30% of paddle bounces.
+               Ball teleports to random (X,Y) on 10% of paddle bounces.
                Scripts that assume "ball will be at (x,y) at frame N" break.
-  - Eval:      ALE/Breakout-v5 (clean, no teleport) — the generalization test.
-  - Check:     ALE/Breakout-v5 (clean) — memorization track, det=True + det=False.
-  - Arch:      NatureCNN (standard, no dropout) — single variable.
-  - Target:    50M steps — proof-of-concept before scaling.
+  - Eval:      ALE/Breakout-v5 (clean, no teleport) â€” the generalization test.
+  - Check:     ALE/Breakout-v5 (clean) â€” memorization track, det=True + det=False.
+  - Arch:      NatureCNN (standard, no dropout) â€” single variable.
+  - Target:    50M steps â€” proof-of-concept before scaling.
 
 Prediction table:
   det=False >=10 unique, det=True >=5 unique  -> TELEPORT WORKS (scale up)
@@ -24,7 +24,7 @@ Hyperparams: n_envs=32, n_steps=128, batch_size=1024, n_epochs=4,
              gamma=0.99, lr=2.5e-4->1e-5, clip=0.2->0.05, ent_coef=0.006
              NatureCNN (standard, no dropout features)
 
-This time: check env matches training engine (both ALE) — fixes L-003.
+This time: check env matches training engine (both ALE) â€” fixes L-003.
 """
 import os
 import glob
@@ -45,11 +45,11 @@ gym.register_envs(ale_py)
 RUN_NAME = "PPO_44"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
-TELEPORT_PROB = 0.30
+TELEPORT_PROB = 0.10
 
 
 class GrayscaleResize(gym.ObservationWrapper):
-    """Resize grayscale to (height, width, 1) — compatible with VecFrameStack."""
+    """Resize grayscale to (height, width, 1) â€” compatible with VecFrameStack."""
     def __init__(self, env, width=84, height=84):
         super().__init__(env)
         self._width = width
@@ -83,7 +83,7 @@ def get_latest_checkpoint(path):
 # ---------------------------------------------------------------------------
 
 def make_training_env():
-    """ALE/Breakout-v5 with ball teleportation on 30% of paddle bounces.
+    """ALE/Breakout-v5 with ball teleportation on 10% of paddle bounces.
 
     Pipeline: ALE -> NoopResetEnv -> ALEBreakoutRandomized ->
               FireResetEnv -> EpisodicLifeEnv -> GrayscaleResize ->
@@ -101,7 +101,7 @@ def make_training_env():
 
 
 def make_eval_env():
-    """Clean ALE/Breakout-v5 — no teleport, the generalization test.
+    """Clean ALE/Breakout-v5 â€” no teleport, the generalization test.
 
     Pipeline: ALE -> NoopResetEnv -> FireResetEnv -> EpisodicLifeEnv ->
               GrayscaleResize -> ClipRewardEnv -> Monitor
@@ -119,7 +119,7 @@ def make_eval_env():
 def make_check_env():
     """Clean ALE/Breakout-v5 for memorization checks.
 
-    NO EpisodicLifeEnv — the MemorizationCheckCallback has its own life-loss
+    NO EpisodicLifeEnv â€” the MemorizationCheckCallback has its own life-loss
     handling (step([1]) to respawn) which is incompatible with EpisodicLifeEnv
     setting done=True on every life. Without it, done=True only fires on game
     over (all 5 lives lost), which the callback handles correctly.
@@ -144,12 +144,12 @@ def make_check_env():
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — ALE Experiment 1: Ball Teleportation via setRAM()")
+    print(f"{RUN_NAME} â€” ALE Experiment 1: Ball Teleportation via setRAM()")
     print(f"  Training: ALE/Breakout-v5 + ALEBreakoutRandomized(teleport_prob={TELEPORT_PROB})")
-    print(f"    Ball teleports to random (X,Y) on 30% of paddle bounces")
+    print(f"    Ball teleports to random (X,Y) on {TELEPORT_PROB*100:.0f}% of paddle bounces")
     print(f"    RAM addresses (verified): Ball X=99, Ball Y=101, Paddle X=72")
-    print(f"  Eval:    ALE/Breakout-v5 — clean, no teleport")
-    print(f"  Check:   ALE/Breakout-v5 — clean, no teleport")
+    print(f"  Eval:    ALE/Breakout-v5 â€” clean, no teleport")
+    print(f"  Check:   ALE/Breakout-v5 â€” clean, no teleport")
     print(f"           det=True + det=False every 1M steps")
     print(f"  Arch:    NatureCNN (standard, no dropout)")
     print(f"  Target:  {TARGET_STEPS:,} steps (~50M)")
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     print(f"  the ball's post-bounce position unpredictable. A policy that")
     print(f"  tracks the ball adapts; a memorized script fails.")
     print(f"  This is the same logic as Experiment 5 but on authentic ALE.")
-    print(f"  Check env matches training engine (both ALE) — fixes L-003.")
+    print(f"  Check env matches training engine (both ALE) â€” fixes L-003.")
 
     # -------------------------------------------------------------------
     # Vectorized environments
@@ -202,13 +202,13 @@ if __name__ == "__main__":
         make_env_fn=make_check_env,
         check_deterministic_false=True,
         summary_lines=[
-            f"PPO_44 — ALE Experiment 1 (ball teleportation via setRAM)",
+            f"PPO_44 â€” ALE Experiment 1 (ball teleportation via setRAM)",
             f"Training: ALE/Breakout-v5 + ALEBreakoutRandomized(teleport_prob={TELEPORT_PROB})",
             f"Policy: NatureCNN (standard, no dropout)",
-            f"Memorization check env: ALE/Breakout-v5 (clean — no teleport)",
+            f"Memorization check env: ALE/Breakout-v5 (clean â€” no teleport)",
             f"LR 2.5e-4->1e-5, clip 0.2->0.05, ent_coef=0.006, batch_size=1024",
             f"Columns: det=True verdict + stoch_* columns for det=False reactivity check",
-            f"Check env matches training engine (both ALE) — fixes L-003",
+            f"Check env matches training engine (both ALE) â€” fixes L-003",
             f"Prediction: if teleport works, det=False should show >=10 unique scores",
         ],
     )
@@ -220,7 +220,7 @@ if __name__ == "__main__":
     ])
 
     # -------------------------------------------------------------------
-    # Model setup — NatureCNN (standard, no custom feature extractor)
+    # Model setup â€” NatureCNN (standard, no custom feature extractor)
     # -------------------------------------------------------------------
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
