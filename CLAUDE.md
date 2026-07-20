@@ -6,23 +6,44 @@ BreakoutBot is a solo PPO-based Atari Breakout RL project using Stable-Baselines
 
 **Repo:** [github.com/mharrell/BreakoutBot](https://github.com/mharrell/BreakoutBot)
 
+## New Session Quickstart (READ THIS FIRST)
+
+If you're a new Claude session, start here:
+
+1. **Read `CURRENT_STATE.md`** — the definitive status document. Claim status board, model roster, what we've learned, what's next. 5-minute read. Everything else references this.
+
+2. **The one-paragraph brief:**
+   > No model in this project has ever genuinely generalized. Every model that appeared promising was found to be a memorized script or noise-masked dead policy. The custom GymBreakout engine does not transfer to authentic ALE (PPO_35: 212 pts → 2 pts, 99.1% drop). The intervention test does not distinguish reactive from dead (dead baseline: 49.6% retention). det=False score diversity exists in dead scripts (19 unique from a confirmed-dead argmax model). The return to authentic ALE Breakout using `setRAM()` for dynamics randomization is the correct next step. Before making any claim about any model, run a dead-model calibration and nosticky verification.
+
+3. **What NOT to trust:**
+   - MemorizationCheckCallback "GENERALIZING" verdicts for sticky models — confirmed invalid (F-001)
+   - Intervention test retention percentages without dead-model calibration (L-001)
+   - det=False score diversity as evidence of reactivity — dead scripts produce it too (L-012)
+   - Shape classifier verdicts (CLUSTERED/CONTINUOUS) without bootstrap CIs (L-014)
+   - Any finding from Experiments 5+ on the custom engine — ALE transfer gap confirmed (L-007)
+   - Memory files with "TENTATIVE:" prefix — not yet validated
+
+4. **Then run the full Session Bootstrap** below.
+
 ## Truth-Source Hierarchy
 
-1. **Ground truth:** `recordings/PPO_*_memorization_track.csv` (written by MemorizationCheckCallback, updated every 10M steps)
-2. **Secondary:** Checkpoint filenames in `models/*/checkpoint/` (step count embedded in name)
-3. **Tertiary:** TensorBoard `tensorboard/*/events.out.*` (binary, need TensorBoard to read)
-4. **Documentation:** `EXPERIMENTS.md`, `RL_REFERENCE.md`, `FLAWS.md`, `.opencode/instructions.md` (human-maintained, may lag)
+1. **Ground truth:** `CURRENT_STATE.md` — claim status board, confirmed/tentative/falsified verdicts
+2. **Primary data:** `calibration_phase1_results.json` (dead-model calibration), `cross_eval_PPO_35_results.json` (ALE transfer gap), `recordings/PPO_*_memorization_track.csv` (memorization tracks — meaningless for GymBreakout-trained models)
+3. **Secondary:** Checkpoint filenames in `models/*/checkpoint/` (step count embedded in name)
+4. **Tertiary:** TensorBoard `tensorboard/*/events.out.*` (binary, need TensorBoard to read)
+5. **Documentation:** `CURRENT_STATE.md` > `LOGICAL_AUDIT.md` > `FLAWS.md` > `EXPERIMENTS.md` > `RL_REFERENCE.md` (human-maintained, may lag behind ground truth)
 
 ## Key Documentation
 
 | File | Purpose |
 |------|---------|
-| `EXPERIMENTS.md` | Full experiment writeup — all three experiments, results, conclusions |
+| `CURRENT_STATE.md` | **READ THIS FIRST.** Definitive status — claim board, model roster, lessons learned, next steps. Updated 2026-07-19. |
+| `LOGICAL_AUDIT.md` | 16-entry logical flaw catalog. L-001/002/007 confirmed with data. Complements FLAWS.md. |
+| `FLAWS.md` | 21-entry methodological flaw catalog with severity ratings. Read before interpreting any result. |
+| `EXPERIMENTS.md` | Full experiment writeup — all experiments, results, conclusions. Claims corrected 2026-07-19. |
 | `RL_REFERENCE.md` | PPO parameter guide, metric diagnostics, 31+ lessons, decision framework |
-| `FLAWS.md` | **READ THIS before interpreting results.** Catalog of 20 known flaws in experimental process and data interpretation, with severity ratings |
 | `.opencode/instructions.md` | Session bootstrap, agent guardrails, known misinterpretation traps |
-| `LOGICAL_AUDIT.md` | **READ THIS alongside FLAWS.md.** Catalog of 16 logical flaws in reasoning, interpretation, and evidence standards. Complements FLAWS.md (which covers methodological flaws). |
-| `archive/` | Historical training and evaluation scripts from Experiments 1-5. Recovered during 2026-07-19 logical audit cleanup. Reference only — not active code. See `archive/README.md`. |
+| `archive/` | Historical training and evaluation scripts from Experiments 1-5. Reference only. See `archive/README.md`. |
 
 ## Critical Rules (Never Do These)
 
@@ -53,14 +74,15 @@ Before interpreting any result, consult `FLAWS.md`. The most consequential activ
 - **F-003 (RESOLVED 2026-07-14):** PPO_26 CONFIRMED MEMORIZED. Nosticky: every game = 60.0 points, 264 frames — a single fixed script. Deep non-sticky pretraining produces higher-scoring memorized scripts but does NOT produce generalization.
 - **F-004 (RESOLVED):** PPO_31b's 10k-game evaluation complete (10,000 games). Stats: avg 22.2, 2.4% zero-score.
 - **L-001 (confirmed 2026-07-19): Intervention test uncalibrated.** PPO_34 (confirmed dead argmax script: unique=1, std=0.0) retains 47.7% score under intervention — indistinguishable from PPO_35's reported 47%. The intervention test's retention percentage is not a reliable indicator of reactivity without a dead-model calibration baseline. See LOGICAL_AUDIT.md L-001.
-- **L-007: GymBreakout-to-ALE transfer unvalidated.** All Experiments 5+ train on a custom engine. Zero validation that findings transfer to authentic ALE Breakout. All post-Experiment-4 conclusions should carry a "custom engine — ALE validation pending" caveat. See LOGICAL_AUDIT.md L-007.
+- **L-007 (CONFIRMED 2026-07-19): GymBreakout-to-ALE transfer is catastrophic.** PPO_35 cross-evaluated on ALE/Breakout-v5: GymBreakout 212 pts → ALE 2 pts (99.1% drop). The custom engine does not approximate authentic Atari Breakout. All post-Experiment-4 conclusions are custom-engine findings pending ALE replication. See LOGICAL_AUDIT.md L-007.
 - **L-014: eval_reactivity.py shape classifier uses uncalibrated thresholds.** The CLUSTERED/CONTINUOUS/UNCLEAR classification uses arbitrary cutoffs (top-3 >50%, <35%) with no statistical justification. Bootstrap CIs should be reported alongside point estimates. See LOGICAL_AUDIT.md L-014.
 
 ## Session Bootstrap (run these in order)
 
+0. **Read `CURRENT_STATE.md`** — claim status board, model roster, what to trust/distrust. 5-minute orientation.
 1. Read `recordings/PPO_*_memorization_track.csv` — ground-truth live state. **WARNING: meaningless for GymBreakout-trained models (PPO_33/34/35+) — the callback tests ALE, not GymBreakout. Use eval callback data (`logs/*/evaluations.npz`) and `eval_reactivity.py` output for these.**
 2. Check `models/*/checkpoint/` — newest checkpoint filenames give actual step counts
-3. Compare memorization track + checkpoint data against `.opencode/instructions.md` "Live Run Status" — flag discrepancies
+3. Compare memorization track + checkpoint data against `CURRENT_STATE.md` and `.opencode/instructions.md` "Live Run Status" — flag discrepancies
 4. Read `FLAWS.md` to refresh awareness of active limitations
 5. Read `LOGICAL_AUDIT.md` to refresh awareness of reasoning pitfalls
 6. If console logs exist: `Get-Content -Encoding Unicode recordings/PPO_*_console.log -Tail 30`
