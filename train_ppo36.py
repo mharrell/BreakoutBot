@@ -1,20 +1,38 @@
 """
-PPO_35 — Experiment 5C: Continuous Mid-Game Physics Interpolation
+PPO_36 — Experiment 6: Per-Frame Ball Noise + Latent Dropout
 
-Escalation from Experiment 5B (per-episode randomization, which produced a
-memorized 64-point script). Instead of fixed params per episode, parameters
-change continuously: every 60-300 frames, 0-3 of (paddle_width, paddle_speed,
-ball_speed) smoothly interpolate to new random values over 30 frames.
+Combines two anti-memorization mechanisms that attack the problem from
+different angles:
 
-The hypothesis: per-episode randomization wasn't enough because the agent
-could detect its parameter set from the first few frames and select a
-parameter-conditioned script. Continuous mid-game changes make that
-impossible — the physics can shift at any moment, forcing genuine
-moment-to-moment reactivity.
+1. Per-frame ball velocity noise (ball_noise_std=0.3):
+   Gaussian perturbation N(0, 0.3) added to ball velocity each frame,
+   rounded to nearest integer. ~10% of frames get a ±1 px/frame kick to
+   one component; ~0.3% get ±2. Over hundreds of frames, the ball path
+   becomes unpredictable. A memorized open-loop script that assumes
+   "ball will be at (x,y) at frame N" will drift and miss. The only
+   strategy that works across all noise realizations is to observe and react.
 
-Training:   DynamicBreakout() — continuous parameter interpolation
-Evaluation: GymBreakout(fixed=True) — standard defaults
+2. Latent dropout (DropoutNatureCNN, p=0.1):
+   Dropout in the shared CNN feature space (after linear projection,
+   before policy/value heads). During PPO updates, random features are
+   zeroed out, preventing the network from encoding frame-precise timing
+   information. Features that survive dropout must be robust (ball
+   position) rather than brittle (exact frame count).
+
+Training:   DynamicBreakout(ball_noise_std=0.05) — continuous physics + ball noise
+Evaluation: GymBreakout(fixed=True) — standard defaults, no noise
 Target:     400M steps
+
+Hypothesis: Per-frame ball noise makes scripting provably worse than
+tracking. Latent dropout denies the network the architectural capacity
+for precise frame timing. Together: the environment resists scripting,
+the network resists memorization.
+
+Prediction table:
+  det=False ≥20 unique, det=True ≥10 unique → SUCCESS (both reactive)
+  det=False ≥20 unique, det=True ≤2 unique  → PARTIAL (like PPO_35, increase noise)
+  det=False ≤5 unique,  det=True ≤2 unique  → FAILED (CNN too robust)
+  det=False low scores, det=True low scores → CATASTROPHIC (reduce noise)
 """
 
 import os
@@ -30,10 +48,13 @@ from stable_baselines3.common.atari_wrappers import ClipRewardEnv
 from memorization_check_callback import MemorizationCheckCallback
 from brick_counter import BrickCountingVecWrapper, BrickRolloutCallback
 from gym_breakout import GymBreakout, DynamicBreakout, DEFAULT_PARAM_RANGES
+from dropout_features import DropoutNatureCNN
 
-RUN_NAME = "PPO_35"
+RUN_NAME = "PPO_36"
 TARGET_STEPS = 400_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
+BALL_NOISE_STD = 0.3   # ~10% of frames get ±1 velocity kick, ~0.3% get ±2
+DROPOUT_P = 0.1
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -65,8 +86,9 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    """DynamicBreakout: parameters change continuously mid-game (Experiment 5C)."""
-    env = DynamicBreakout()
+    """DynamicBreakout with per-frame ball velocity noise (Experiment 6).
+    Continuous physics changes + unpredictable ball path."""
+    env = DynamicBreakout(ball_noise_std=BALL_NOISE_STD)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
@@ -74,7 +96,8 @@ def make_training_env():
 
 
 def make_eval_env():
-    """GymBreakout with fixed defaults — the generalization test."""
+    """GymBreakout with fixed defaults — no noise, no randomization.
+    This is the generalization test."""
     env = GymBreakout(fixed=True)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
@@ -82,18 +105,37 @@ def make_eval_env():
     return env
 
 
+def make_check_env():
+    """GymBreakout for memorization checks — matches eval env, VecFrameStack-wrapped."""
+    env = GymBreakout(fixed=True)
+    env = GrayscaleResize(env, width=84, height=84)
+    env = ClipRewardEnv(env)
+    env = Monitor(env)
+    env = DummyVecEnv([lambda: env])
+    env = VecFrameStack(env, n_stack=4)
+    return env
+
+
 if __name__ == "__main__":
     pr = DEFAULT_PARAM_RANGES
-    print(f"{RUN_NAME} — Experiment 5C: Continuous Mid-Game Physics Interpolation")
-    print(f"  Training: DynamicBreakout — params change every 60-300 frames")
+    print(f"{RUN_NAME} — Experiment 6: Per-Frame Ball Noise + Latent Dropout")
+    print(f"  Training: DynamicBreakout(ball_noise_std={BALL_NOISE_STD})")
+    print(f"    Continuous physics changes every 60-300 frames")
+    print(f"    Per-frame Gaussian ball velocity noise σ={BALL_NOISE_STD}")
     print(f"    ranges: paddle_width=[{pr['paddle_width'][0]},{pr['paddle_width'][1]}], "
           f"ball_speed_y=[{pr['ball_speed_y'][0]},{pr['ball_speed_y'][1]}], "
           f"ball_speed_x=[{pr['ball_speed_x'][0]},{pr['ball_speed_x'][1]}], "
           f"paddle_speed=[{pr['paddle_speed'][0]},{pr['paddle_speed'][1]}]")
-    print(f"  Eval:   GymBreakout(fixed=True) — standard defaults")
-    print(f"  Note:   Memorization checks use ALE Breakout (not GymBreakout).")
-    print(f"          Eval callback scores are the reliable behavioral data.")
-    print(f"  Target: {TARGET_STEPS:,} steps")
+    print(f"  Policy:  DropoutNatureCNN(dropout_p={DROPOUT_P})")
+    print(f"    Dropout in shared feature space — active during PPO updates")
+    print(f"    SB3 handles train/eval switching: dropout OFF during rollouts")
+    print(f"  Eval:    GymBreakout(fixed=True) — standard defaults, no noise")
+    print(f"  Check:   GymBreakout(fixed=True) — det=True + det=False every 1M steps")
+    print(f"  Target:  {TARGET_STEPS:,} steps")
+    print()
+    print(f"  Hypothesis: Ball noise makes scripting worse than tracking.")
+    print(f"  Latent dropout denies frame-precise timing to the network.")
+    print(f"  Together: environment resists scripts, network resists memorization.")
 
     # -----------------------------------------------------------------------
     # Vectorized environments
@@ -127,21 +169,21 @@ if __name__ == "__main__":
         verbose=1,
     )
 
-    # Memorization checks use ALE Breakout (hardcoded in callback).
-    # For PPO_35 (GymBreakout-trained), the eval callback is the
-    # reliable behavioral data on the correct environment.
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME,
         sticky_actions=False,
         check_freq=1_000_000,
         n_games=20,
+        make_env_fn=make_check_env,
+        check_deterministic_false=True,
         summary_lines=[
-            f"PPO_35 — Experiment 5C (continuous mid-game physics interpolation)",
-            f"Training: DynamicBreakout — params change every 60-300 frames",
-            f"Eval: GymBreakout fixed defaults",
+            f"PPO_36 — Experiment 6 (per-frame ball noise + latent dropout)",
+            f"Training: DynamicBreakout(ball_noise_std={BALL_NOISE_STD})",
+            f"Policy: DropoutNatureCNN(dropout_p={DROPOUT_P})",
+            f"Memorization check env: GymBreakout(fixed=True) — same as eval env",
             "LR 2.5e-4->1e-5, clip 0.2->0.05, ent_coef=0.006, batch_size=1024",
-            "WARNING: memorization check uses ALE Breakout (not GymBreakout)",
-            "Eval callback is the reliable behavioral metric for this experiment",
+            "Columns: det=True verdict + stoch_* columns for det=False reactivity check",
+            "Experiment 6 hypothesis: ball noise + dropout prevent scripting",
         ],
     )
 
@@ -153,8 +195,13 @@ if __name__ == "__main__":
     ])
 
     # -----------------------------------------------------------------------
-    # Model setup
+    # Model setup — DropoutNatureCNN with p=0.1 dropout in feature space
     # -----------------------------------------------------------------------
+    policy_kwargs = dict(
+        features_extractor_class=DropoutNatureCNN,
+        features_extractor_kwargs=dict(dropout_p=DROPOUT_P),
+    )
+
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
 
     if resume_path:
@@ -177,6 +224,7 @@ if __name__ == "__main__":
             clip_range=linear_schedule(0.2, 0.05),
             ent_coef=0.006,
             vf_coef=0.5,
+            policy_kwargs=policy_kwargs,
         )
         reset_num_timesteps = True
 

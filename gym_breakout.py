@@ -154,6 +154,13 @@ class DynamicBreakout(gym.Env):
     randomization (Experiment 5B) was not enough — the CNN memorized a
     parameter-conditioned 64-point script. Continuous mid-game changes
     force the agent to re-assess its physics model moment-to-moment.
+
+    ball_noise_std (Experiment 6): If > 0, adds Gaussian noise N(0, σ)
+    to ball velocity every frame. Tiny per-frame perturbations compound
+    over hundreds of frames, making the ball path unpredictable. A
+    memorized open-loop script that assumes the ball will be at position
+    (x,y) at frame N will drift and miss. The only strategy that works
+    across all noise realizations is to observe and react.
     """
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 60}
@@ -161,9 +168,11 @@ class DynamicBreakout(gym.Env):
     INTERP_FRAMES = 30            # frames to smooth-interpolate each change
     CHANGE_INTERVAL = (60, 300)   # frames between change events (uniform)
 
-    def __init__(self, param_ranges=None):
+    def __init__(self, param_ranges=None, ball_noise_std=0.0, dynamic_params=True):
         super().__init__()
         self.param_ranges = param_ranges or DEFAULT_PARAM_RANGES
+        self.ball_noise_std = ball_noise_std
+        self.dynamic_params = dynamic_params
 
         self.observation_space = spaces.Box(
             low=0, high=255, shape=(210, 160), dtype=np.uint8
@@ -196,8 +205,21 @@ class DynamicBreakout(gym.Env):
         if self._env is None:
             raise RuntimeError("Must call reset() before step().")
 
-        # ---- Apply interpolation step ----
-        self._apply_interpolation_step()
+        # ---- Apply interpolation step (only when dynamic_params enabled) ----
+        if self.dynamic_params:
+            self._apply_interpolation_step()
+
+        # ---- Per-frame ball velocity noise (Experiment 6) ----
+        # Tiny Gaussian perturbation, rounded to nearest integer.
+        # At σ=0.05, most frames get ±0 (no change); occasional frames get
+        # ±1 px/frame kick. Over hundreds of frames, the ball path becomes
+        # unpredictable → open-loop scripts that assume a predictable path
+        # will drift and miss. The ONLY strategy is to observe and react.
+        if self.ball_noise_std > 0:
+            noise_y = int(round(float(self._rng.normal(0.0, self.ball_noise_std))))
+            noise_x = int(round(float(self._rng.normal(0.0, self.ball_noise_std))))
+            self._env.ball_v[0] += noise_y
+            self._env.ball_v[1] += noise_x
 
         # ---- Step the engine ----
         obs, reward, terminal, _ = self._env.step(int(action))
@@ -206,11 +228,12 @@ class DynamicBreakout(gym.Env):
         life_lost = lives < self._lives
         self._lives = lives
 
-        # ---- Check if it's time for new changes ----
-        self._frames_until_next -= 1
-        if self._frames_until_next <= 0 and not self._interps:
-            self._trigger_changes()
-            self._schedule_next_change()
+        # ---- Check if it's time for new changes (only when dynamic_params enabled) ----
+        if self.dynamic_params:
+            self._frames_until_next -= 1
+            if self._frames_until_next <= 0 and not self._interps:
+                self._trigger_changes()
+                self._schedule_next_change()
 
         info = {"lives": lives}
 
