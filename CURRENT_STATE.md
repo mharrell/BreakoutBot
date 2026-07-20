@@ -106,18 +106,64 @@ PPO_37 through PPO_43 were planned/designed but never trained beyond early steps
 
 ## What's Next
 
-### Immediate: ALE Return
+### Immediate: ALE Return — First Experiment Spec
 
-The project is returning to authentic ALE/Breakout-v5 for all new experiments. The key enabler is `ALE.setRAM(addr, value)`, which allows writing to Atari 2600 RAM at runtime — enabling dynamics randomization (ball teleportation, paddle perturbation) on the real ROM without modification.
+The project is returning to authentic ALE/Breakout-v5. Here is the concrete first experiment a new session can start building immediately.
 
-**Required RAM addresses** (from OCAtari, to be verified):
-- Paddle X: 72
-- Ball X: 99, Ball Y: 101
-- Score: 76-77
-- Lives: 57
-- Brick state: 0-35 (36 bytes, bit-packed)
+#### Step 0: Verify RAM Addresses (30 min)
 
-**First experiment:** Build `ALEBreakoutRandomized` wrapper, reproduce the dynamics randomization pattern on ALE, and validate with the full diagnostic protocol (nosticky verification, intervention test with dead-model calibration, det=True/False comparison with bootstrap CIs).
+The addresses below are from OCAtari — they may be wrong for ALE v0.11. Write a probe script that sets each address and observes the effect:
+
+```
+Expected (from OCAtari, UNVERIFIED):
+  Paddle X:    72    (write 0-191, observe paddle position)
+  Ball X:      99    (write 0-191, observe ball horizontal)
+  Ball Y:      101   (write 0-255, observe ball vertical)
+  Score:       76-77 (read-only verification)
+  Lives:       57    (read-only verification)
+```
+
+Pattern: `env.unwrapped.ale.setRAM(addr, value)` — set before `env.step()`. Verify each address by writing known values and visually confirming. Update the address list in `ale-return-direction.md` memory with verified values.
+
+#### Step 1: Build `ALEBreakoutRandomized` Wrapper (1-2 hours)
+
+A `gym.Wrapper` around `ALE/Breakout-v5` (frameskip=1, repeat_action_probability=0) that supports the same intervention test as the GymBreakout version:
+
+- **Ball teleportation**: on paddle bounce, 30% probability, teleport ball to random X/Y via `setRAM()`
+- **No other randomization** — single variable for the first experiment
+- **Same preprocessing** as existing pipeline: GrayscaleResize(84,84), ClipRewardEnv, Monitor → DummyVecEnv → VecFrameStack(4)
+
+Reference pattern: `calibration_phase1.py` `InterventionBreakout` class (wraps GymBreakout, teleports ball). Same logic, different engine.
+
+#### Step 2: Calibrate on Known-Dead ALE Models (1 hour)
+
+Before training anything new, establish the ALE dead-model baseline. Run the intervention test on:
+- **PPO_26** (ALE-trained, confirmed memorized: 60 pts × 500 games nosticky)
+- **PPO_30b** (ALE-trained, confirmed memorized: 99.8% zeros)
+
+This gives us: "A known-dead ALE model retains X% under intervention." That's the calibration baseline that was missing for GymBreakout. Without it, intervention retention numbers are uninterpretable (see L-001).
+
+#### Step 3: Train Small Proof-of-Concept (1-2 days GPU)
+
+Train a NatureCNN PPO model on `ALE/Breakout-v5` with the teleportation wrapper from Step 1:
+
+- **Architecture**: NatureCNN (standard — no dropout yet, single variable)
+- **Training**: 32 envs, standard PPO hyperparams (matching train_ppo36.py defaults)
+- **Target**: ~50M steps — enough to see if the policy develops reactivity
+- **During training**: MemorizationCheckCallback with `make_env_fn` pointing to ALE (not GymBreakout — this time the callback env matches the training env)
+- **If the model memorizes (≤2 unique nosticky at 50M)**: teleportation alone isn't enough. Consider adding ball velocity perturbation or per-episode physics randomization (setRAM-based).
+- **If the model shows diversity (≥10 unique nosticky)**: run full Breakthrough Verification Protocol (all 6 gates, in order).
+
+#### Step 4: Full Verification (if Step 3 succeeds)
+
+- Gate 1: Both inference modes tested (det=True + det=False, 100 games)
+- Gate 2: Calibration baseline (Step 2 data)
+- Gate 3: Comparison baseline (compare against PPO_26)
+- Gate 4: Std column verified
+- Gate 5: Falsification pre-registered BEFORE claiming success
+- Gate 6: Environment match confirmed (training = ALE, eval = ALE)
+
+**Do not write the "first sighted ALE policy" claim until all 6 gates pass.** The project has 4 documented false positives from skipping gates (see Claim Status Board above).
 
 ### For New Sessions
 
