@@ -21,7 +21,8 @@ BreakoutBot is a solo PPO-based Atari Breakout RL project using Stable-Baselines
 | `RL_REFERENCE.md` | PPO parameter guide, metric diagnostics, 31+ lessons, decision framework |
 | `FLAWS.md` | **READ THIS before interpreting results.** Catalog of 20 known flaws in experimental process and data interpretation, with severity ratings |
 | `.opencode/instructions.md` | Session bootstrap, agent guardrails, known misinterpretation traps |
-| `EVALUATION_PROTOCOL.md` | Standardized protocol for running and interpreting evaluations |
+| `LOGICAL_AUDIT.md` | **READ THIS alongside FLAWS.md.** Catalog of 16 logical flaws in reasoning, interpretation, and evidence standards. Complements FLAWS.md (which covers methodological flaws). |
+| `archive/` | Historical training and evaluation scripts from Experiments 1-5. Recovered during 2026-07-19 logical audit cleanup. Reference only — not active code. See `archive/README.md`. |
 
 ## Critical Rules (Never Do These)
 
@@ -36,6 +37,11 @@ BreakoutBot is a solo PPO-based Atari Breakout RL project using Stable-Baselines
 9. **Never conclude a policy is dead from deterministic inference alone.** PPO_30b with det=True, sticky=off: 2 unique scores, 99.8% zeros. Same model with det=False, sticky=off: 43 unique scores, avg 23.5. The argmax can collapse while the policy retains useful entropy. Always test both.
 10. **Never claim that sticky fine-tuning cures memorization.** Every sticky-trained model ever tested in this project (PPO_26, PPO_28, PPO_29, PPO_30b, PPO_31b) collapsed to a deterministic script without sticky actions. Sticky actions mask memorization with noise; they do not prevent or cure it. The only untested path is preventing memorization from forming during early training (Experiment 4: low-sticky single-phase).
 11. **Never make design decisions silently — always present them before implementing.** Any new script, wrapper, or experiment component has design decisions embedded in it (parameter values, distribution shapes, what to include or exclude from standard pipelines). Before writing code, surface each decision explicitly: what it is, what the options are, what the recommendation is, and why. Then get explicit approval. Do not write the code first and explain the decisions after. This applies to everything from a 30-line wrapper to a full experiment design. It also means: never launch a training run without explicit confirmation — that includes not structuring integration tests in a way that could accidentally start training.
+12. **Never kill an experiment based on wrong-environment data.** PPO_35 was killed because its memorization track (ALE/Breakout-v5) showed 268 SINGLE_SCRIPT verdicts — but PPO_35 trained on GymBreakout, and the callback tested ALE. The project's own documentation warns this data is "meaningless for GymBreakout-trained models." If a metric comes from the wrong environment, it cannot support a kill decision. Always verify that the data source matches the training environment before acting on it. See LOGICAL_AUDIT.md L-003.
+13. **Never claim causation from ≤3 data points without a statistical test.** Two snapshots cannot establish a trend. PPO_36's "dissolution regression" was diagnosed from two checkpoints 13M steps apart. Every model in this project's history shows wide checkpoint-to-checkpoint oscillation. Before claiming a directional change, compute whether the difference exceeds what would be expected from normal between-checkpoint variance. See LOGICAL_AUDIT.md L-004.
+14. **Every new metric or classification must be calibrated against a known-dead baseline before being used to support claims.** This applies to: intervention test retention percentage, eval_reactivity.py shape classification (CLUSTERED/CONTINUOUS), top-3 concentration, "dissolution" trajectory analysis, and any future diagnostic. The calibration logic from F-001 (run a confirmed-dead model through the same test) applies universally. If a dead script produces the same signal as the model being tested, the signal is not evidence of reactivity. See LOGICAL_AUDIT.md L-001, L-014.
+15. **Never interpret "0% zero-score" as evidence of reactivity.** PPO_26 had 0% zero-score across 10,000 games and was a 60-point memorized script. Zero-zero-score means the policy never produces a score of exactly zero — it doesn't mean the policy tracks the ball. A dead script that consistently scores 5 points also has 0% zero-score. This is a floor-quality metric, not a reactivity metric. See LOGICAL_AUDIT.md L-006.
+16. **Treat interpretive categories as descriptive labels, not diagnostic verdicts.** Terms like "argmax-script + policy-entropy," "script diversification," "dissolution," and "CLUSTERED vs. CONTINUOUS" describe patterns in score distributions. They do not directly measure ball-tracking, state-conditioned action selection, or reactivity. Score diversity has multiple explanations (noise masking, script-switching under sampling, cross-checkpoint cycling) — only one of which is genuine reactivity. Frame-level action analysis would be needed to distinguish these and has not been done. See LOGICAL_AUDIT.md L-012.
 
 ## Known Methodological Limitations
 
@@ -46,14 +52,19 @@ Before interpreting any result, consult `FLAWS.md`. The most consequential activ
 - **F-002:** Pretraining duration and sticky-step count are perfectly anti-correlated in Experiment 3. Both models are now confirmed memorized — the "trade-off" is between which script each memorized.
 - **F-003 (RESOLVED 2026-07-14):** PPO_26 CONFIRMED MEMORIZED. Nosticky: every game = 60.0 points, 264 frames — a single fixed script. Deep non-sticky pretraining produces higher-scoring memorized scripts but does NOT produce generalization.
 - **F-004 (RESOLVED):** PPO_31b's 10k-game evaluation complete (10,000 games). Stats: avg 22.2, 2.4% zero-score.
+- **L-001 (confirmed 2026-07-19): Intervention test uncalibrated.** PPO_34 (confirmed dead argmax script: unique=1, std=0.0) retains 47.7% score under intervention — indistinguishable from PPO_35's reported 47%. The intervention test's retention percentage is not a reliable indicator of reactivity without a dead-model calibration baseline. See LOGICAL_AUDIT.md L-001.
+- **L-007: GymBreakout-to-ALE transfer unvalidated.** All Experiments 5+ train on a custom engine. Zero validation that findings transfer to authentic ALE Breakout. All post-Experiment-4 conclusions should carry a "custom engine — ALE validation pending" caveat. See LOGICAL_AUDIT.md L-007.
+- **L-014: eval_reactivity.py shape classifier uses uncalibrated thresholds.** The CLUSTERED/CONTINUOUS/UNCLEAR classification uses arbitrary cutoffs (top-3 >50%, <35%) with no statistical justification. Bootstrap CIs should be reported alongside point estimates. See LOGICAL_AUDIT.md L-014.
 
 ## Session Bootstrap (run these in order)
 
-1. Read `recordings/PPO_*_memorization_track.csv` — the only ground-truth live state
+1. Read `recordings/PPO_*_memorization_track.csv` — ground-truth live state. **WARNING: meaningless for GymBreakout-trained models (PPO_33/34/35+) — the callback tests ALE, not GymBreakout. Use eval callback data (`logs/*/evaluations.npz`) and `eval_reactivity.py` output for these.**
 2. Check `models/*/checkpoint/` — newest checkpoint filenames give actual step counts
 3. Compare memorization track + checkpoint data against `.opencode/instructions.md` "Live Run Status" — flag discrepancies
 4. Read `FLAWS.md` to refresh awareness of active limitations
-5. If console logs exist: `Get-Content -Encoding Unicode recordings/PPO_*_console.log -Tail 30`
+5. Read `LOGICAL_AUDIT.md` to refresh awareness of reasoning pitfalls
+6. If console logs exist: `Get-Content -Encoding Unicode recordings/PPO_*_console.log -Tail 30`
+7. If interpreting intervention test results: verify that a dead-model calibration has been run (see LOGICAL_AUDIT.md L-001)
 
 ## Conventions
 

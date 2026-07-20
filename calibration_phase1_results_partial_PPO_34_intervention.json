@@ -1,0 +1,27 @@
+{
+  "PPO_34_intervention": {
+    "run": "PPO_34",
+    "n_games": 50,
+    "normal_mean": 314.0,
+    "normal_median": 314.0,
+    "normal_std": 0.0,
+    "normal_unique": 1,
+    "intervention_mean": 155.74,
+    "intervention_median": 148.0,
+    "intervention_std": 92.8260329864419,
+    "intervention_unique": 48,
+    "delta_mean": 158.26,
+    "delta_std": 92.8260329864419,
+    "retention_pct": 49.6,
+    "correlation": 0,
+    "avg_interventions_per_game": 0.0,
+    "normal_mean_ci95": [
+      314.0,
+      314.0
+    ],
+    "intervention_mean_ci95": [
+      130.2795,
+      181.18
+    ]
+  }
+}

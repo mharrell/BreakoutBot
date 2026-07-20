@@ -5,9 +5,9 @@
 - **Experiment 2 (COMPLETE):** PPO_28/29 — removed sticky actions from trained models. **Finding:** both collapsed to fixed open-loop action sequences within ~30M steps. Training metrics (EV, value_loss, entropy) lied during collapse. Sticky actions are required at inference time, not just during training.
 - **Experiment 3 (COMPLETE — conclusions overturned by post-hoc analysis):** PPO_30/31 — non-sticky pretraining duration sweep at 400M total budget. **Both models CONFIRMED MEMORIZED.** The Phase 2 "GENERALIZING" verdicts were sticky-action noise — calibration shows a dead policy + p=0.25 sticky produces 8-14 unique scores, matching the observed 10-19 range. Nosticky verification confirms both collapse to ≤2 unique scores. PPO_30b: 2 unique (99.8% zeros). PPO_31b: 2 unique (all 31-point script). The "trade-off" is between which memorized script each learned, not between generalization quality. See Post-Hoc Analysis section below.
 
-**BREAKTHROUGH (2026-07-15): PPO_35 — the first non-memorized model in the project.** Continuous mid-game physics changes (Experiment 5C) succeeded where sticky actions, frame skip randomization, and per-episode physics randomization all failed. At 64M steps: 21+ unique eval scores, explained_variance=0.85 (vs 0.93-0.96 for memorized models), eval scores cycling through genuinely different strategies. First evidence that a PPO agent can learn reactive ball-tracking in Breakout.
+**TENTATIVE (2026-07-15, revised 2026-07-19): PPO_35 — score diversity confirmed, but "non-memorized" claim is NOT SUPPORTED by calibration data.** PPO_35's 21+ unique det=False scores and 0.85 explained_variance initially suggested reactive ball-tracking. However, dead-model calibration (2026-07-19 logical audit) shows that a known-dead argmax script (PPO_34) produces the same signals: 19 unique det=False scores, 44% top-3 concentration (vs PPO_35's 21 unique, 42%). The intervention test does not distinguish reactive from dead (PPO_34 retention: 49.6%, PPO_35: 44.7%, correlation = 0.000 for both). PPO_35's det=True is a single argmax script (unique=1, std=0.0). Score diversity from stochastic sampling of a memorized policy is a known false-positive pattern (see LOGICAL_AUDIT.md L-001, L-002, L-012). GymBreakout-to-ALE transfer gap remains unvalidated (L-007). The claim requires frame-level action analysis, bootstrap-calibrated shape thresholds, and ALE validation before it can be supported. See Known Limitations below and LOGICAL_AUDIT.md for full analysis.
 
-**Currently training:** PPO_32 (Experiment 4, p=0.05 sticky, 400M target, memorized with boom-bust cycles) and PPO_35 (Experiment 5C, continuous physics randomization, 400M target). See Experiment 5 section below for the full dependency chain that led here.
+**Training complete:** PPO_35 (64M steps, stopped), PPO_36 (99.2M steps, stopped). PPO_32 (Experiment 4, p=0.05 sticky) status unknown — no process running as of 2026-07-19.
 
 ## ⚠️ Known Limitations
 
@@ -19,7 +19,15 @@ This document reports results from experiments with known methodological flaws. 
 - **F-004 (RESOLVED):** PPO_31b's 10k-game evaluation was completed (10,000 games as of 2026-07-14). Stats: avg 22.2, median 20, 2.4% zero-score.
 - **F-010:** Funnel rate comparisons (0-7 events in 10,000 trials) are not statistically significant. Treat funnel rate rankings as directional indicators, not settled differences.
 
-These and other limitations (confounded LR restart values, unmatched n_envs, mid-training evaluations, missing sticky-off verification, etc.) are documented with severity ratings and recommended remedies in `FLAWS.md`.
+**Logical flaws** (from `LOGICAL_AUDIT.md`, 2026-07-19 audit):
+
+- **L-001 (CONFIRMED):** Intervention test uncalibrated. PPO_34 (dead argmax script, det=True: 1 unique, std=0.0) retains 49.6% under intervention — indistinguishable from PPO_35's 44.7%. The test does not distinguish reactive policies from dead scripts.
+- **L-002 (CONFIRMED):** Breakthrough Verification Protocol not followed. Gates 2 (calibration baseline), 3 (comparison baseline), and 5 (falsification pre-registration) were skipped before the "sighted policy" claim was written.
+- **L-007 (CONFIRMED 2026-07-19):** GymBreakout-to-ALE transfer is catastrophic. PPO_35 cross-evaluated on ALE/Breakout-v5: det=True mean=2.0 (vs 212.0 on GymBreakout, a 99.1% drop). The model that appeared to be a high-scoring argmax script on the custom engine is a 2-point dead script on authentic Atari. All post-Experiment-4 conclusions should be treated as custom-engine findings pending ALE replication.
+- **L-012:** Conceptual vocabulary creep. "CLUSTERED," "CONTINUOUS," "script diversification," "dissolution" are descriptive labels, not diagnostic verdicts. Score diversity has multiple explanations — only one of which is genuine reactivity.
+- **L-014:** eval_reactivity.py shape classifier uses uncalibrated thresholds (top-3 >50%, <35%) with no statistical justification. Bootstrap CIs should be reported alongside point estimates.
+
+These and other limitations (confounded LR restart values, unmatched n_envs, mid-training evaluations, missing sticky-off verification, etc.) are documented with severity ratings and recommended remedies in `FLAWS.md` and `LOGICAL_AUDIT.md`.
 
 ## Experiment 1: Sticky Actions and Training Regime — PPO_26 vs PPO_27
 

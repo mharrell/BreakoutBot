@@ -1,0 +1,65 @@
+{
+  "PPO_34_intervention": {
+    "run": "PPO_34",
+    "n_games": 50,
+    "normal_mean": 314.0,
+    "normal_median": 314.0,
+    "normal_std": 0.0,
+    "normal_unique": 1,
+    "intervention_mean": 155.74,
+    "intervention_median": 148.0,
+    "intervention_std": 92.8260329864419,
+    "intervention_unique": 48,
+    "delta_mean": 158.26,
+    "delta_std": 92.8260329864419,
+    "retention_pct": 49.6,
+    "correlation": 0,
+    "avg_interventions_per_game": 0.0,
+    "normal_mean_ci95": [
+      314.0,
+      314.0
+    ],
+    "intervention_mean_ci95": [
+      130.2795,
+      181.18
+    ]
+  },
+  "PPO_34_reactivity": {
+    "det_true": {
+      "unique": 1,
+      "mean": 89.0,
+      "median": 89.0,
+      "std": 0.0,
+      "min": 89,
+      "max": 89,
+      "top3_pct": 100.0,
+      "singleton_ratio": 0.0,
+      "max_gap": 0,
+      "score_range": 0.0,
+      "shape": "CLUSTERED",
+      "mean_ci95": [
+        89.0,
+        89.0
+      ],
+      "zero_score_pct": 0.0
+    },
+    "det_false": {
+      "unique": 19,
+      "mean": 52.4,
+      "median": 41.0,
+      "std": 19.7,
+      "min": 31,
+      "max": 86,
+      "top3_pct": 44.0,
+      "singleton_ratio": 0.421,
+      "max_gap": 19,
+      "score_range": 55.0,
+      "shape": "UNCLEAR",
+      "mean_ci95": [
+        47.1,
+        58.02
+      ],
+      "zero_score_pct": 0.0
+    }
+  }
+}
