@@ -117,16 +117,20 @@ def make_eval_env():
 
 
 def make_check_env():
-    """Clean ALE/Breakout-v5 for memorization checks — matches eval env.
+    """Clean ALE/Breakout-v5 for memorization checks.
 
-    Pipeline: ALE -> NoopResetEnv -> FireResetEnv -> EpisodicLifeEnv ->
+    NO EpisodicLifeEnv — the MemorizationCheckCallback has its own life-loss
+    handling (step([1]) to respawn) which is incompatible with EpisodicLifeEnv
+    setting done=True on every life. Without it, done=True only fires on game
+    over (all 5 lives lost), which the callback handles correctly.
+
+    Pipeline: ALE -> NoopResetEnv -> FireResetEnv ->
               GrayscaleResize -> ClipRewardEnv -> Monitor ->
               DummyVecEnv[1] -> VecFrameStack(4)
     """
     env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
-    env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
