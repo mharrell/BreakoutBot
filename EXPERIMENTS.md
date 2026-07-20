@@ -1,5 +1,179 @@
 # Experiments
 
+## Project Direction — July 19, 2026
+
+### Where We Are
+
+After 43 PPO runs, billions of training steps, and a custom Breakout engine, we have one finding that has survived every test: **dynamics randomization forces policies to maintain action-distribution entropy, and that entropy produces behavior that is genuinely responsive to game state.** The intervention test (teleporting the ball mid-game and measuring whether the policy adapts) confirms this: PPO_35, trained with continuous mid-game physics changes, retains 47% of its normal score under teleportation, while all noise-only models collapse to 8-26%.
+
+We also know what doesn't work: sticky actions mask memorization with noise but don't prevent it (confirmed across 6 models); perceptual noise alone produces brittle scripts; more network capacity doesn't help; and linear LR decay works against dissolution by starving the policy of the update magnitude needed to resist script attractors.
+
+### The Gap
+
+Every finding above was produced on `breakout_env_vendor` — a 238-line from-scratch Breakout clone. It lacks real Atari Breakout's ball speed-up mechanic, uses different ball geometry (5×2 vs ~2×2 pixels), has simplified paddle physics, and renders with custom sprites. We don't know how much of what we've observed is about Breakout versus about our Breakout approximation.
+
+This wasn't a mistake — it was a pragmatic tradeoff. ALE doesn't expose physics parameters for modification, and we needed controllable randomization to test hypotheses quickly. The custom engine served that purpose. But the findings are worth verifying against the real game.
+
+### The Shift
+
+We're returning to ALE. Two things make this possible now that weren't obvious when we started:
+
+1. **`ALE.setRAM(addr, value)`** (since ALE v0.7.0, 2021) lets us write directly to the Atari's 128 bytes of RAM at runtime. We can perturb ball position, paddle state, brick layout, and game variables on the real Atari ROM without ROM modification.
+
+2. **OCAtari's verified RAM map** gives us the exact addresses for Breakout's game objects — paddle X (RAM 72), ball X/Y (RAM 99/101), score (76-77), lives (57), and brick state (RAM 0-35).
+
+This means we can implement dynamics randomization on authentic ALE Breakout — ball teleportation, paddle perturbations, brick randomization, velocity injection — using the real game's physics, rendering, and mechanics. The ball will speed up as bricks break. The paddle will have real Atari acceleration. The visuals will be what the CNN would see on real hardware.
+
+### What We're Keeping
+
+- **The design insight**: environment dynamics randomization, not output perturbation, forces responsive behavior
+- **The diagnostic toolkit**: `eval_reactivity.py`, the intervention test, distribution shape analysis
+- **The methodology lessons**: nosticky/sticky-off verification, calibration baselines, the danger of interpreting score diversity as behavioral diversity
+- **The dropout mechanism**: latent-space dropout as an entropy stabilizer (proven in PPO_36 vs PPO_37 ablation)
+
+### What Changes
+
+- **Training environment**: ALE Breakout with `setRAM()`-based randomization wrapper replaces `DynamicBreakout`
+- **Evaluation**: ALE Breakout with standard defaults (no `setRAM` perturbations) — real Atari, real rules
+- **The transfer question disappears**: we train on ALE, we evaluate on ALE. No sim-to-real gap.
+- **Experiment 10 (PPO_41/42/43)**: continues on the custom engine for the LR hypothesis, but new experiments launch on ALE
+
+### What We're Not Doing
+
+- **Not calling the custom-engine work a mistake.** It was the fastest path to testing dynamics-randomization hypotheses, and it produced genuine insights. The intervention test showing PPO_35 adapts to teleportation is a real result — it just needs ALE validation.
+- **Not abandoning dynamics randomization.** The insight is sound. We're upgrading the test environment, not the hypothesis.
+- **Not building an ALE-compatible renderer for the custom engine.** That would fix the visual gap while leaving the physics gap untouched. It's the wrong half of the problem.
+
+### Next Steps
+
+1. **Kill Experiment 10 (PPO_41/42/43)** — ✅ DONE. The LR hypothesis was developed on the custom engine. If it matters, it will surface in ALE training.
+2. **Build `ALEBreakoutRandomized`** — a Gymnasium wrapper around ALE Breakout that uses `setRAM()` to inject dynamics perturbations. **Plan below.**
+3. **Reproduce PPO_35's reactivity pattern on ALE** — train with ALE dynamics randomization, test with intervention.
+4. **Clean up project** — ✅ DONE. Removed dead models (35 dirs, ~14GB), videos, stale scripts, TensorBoard logs, console logs. Kept PPO_25-27 (ALE baselines) and PPO_34-36 (custom engine key results).
+
+---
+
+## Pending Plan: ALE Breakout with setRAM() Dynamics Randomization
+
+**Status: DESIGN PHASE — not yet implemented.** This plan is documented for evaluation by a new session before any code is written.
+
+### Background
+
+`ALE.setRAM(addr, value)` (available since ALE v0.7.0, 2021) writes directly to the Atari 2600's 128 bytes of RAM at runtime. Combined with `ALE.getRAM()` to read state and `ALE.cloneState()`/`restoreState()` for save/load, this gives us runtime control over game state on authentic ALE Breakout without ROM modification.
+
+### Design Decisions (to be evaluated before implementation)
+
+#### Decision 1: RAM Address Verification
+
+The project's old RAM map and OCAtari's map disagree:
+
+| Game element | Old project map | OCAtari map |
+|-------------|----------------|-------------|
+| Paddle X | 70 | 72 |
+| Ball X | 72 | 99 |
+| Ball Y | 90 | 101 |
+| Score | — | 76-77 |
+| Lives | — | 57 |
+| Brick state | — | 0-35 |
+
+**Recommendation:** Write a probe script first. Run ALE Breakout, read all 128 RAM bytes, perturb each candidate address with `setRAM()`, observe which game element changes. ~30 minutes, settles the question definitively.
+
+#### Decision 2: Perturbation Types
+
+| Type | Mechanism | Risk |
+|------|-----------|------|
+| Ball teleport | Write new X/Y to ball position RAM | Low — proven in intervention test |
+| Paddle teleport | Write new X to paddle position RAM | Low — simple position write |
+| Ball velocity inject | Write to ball speed RAM | **Unknown** — velocity may be a ROM constant, not in RAM |
+| Brick scramble | Bit-flip brick state RAM (bytes 0-35) | Low — brick state is confirmed in RAM |
+
+**Recommendation:** Start with ball teleportation only. It's the simplest mechanism and directly replicates what PPO_35 proved works. Add paddle perturbation and brick scrambling in later iterations. Defer velocity injection until RAM addresses are verified.
+
+#### Decision 3: Perturbation Schedule
+
+- **Continuous** (matching DynamicBreakout/PPO_35): every 60-300 frames, apply ball teleportation. Forces moment-to-moment reactivity. Proven effective on custom engine.
+- **Per-episode** (matching GymBreakout/PPO_34): at reset, randomize state once. Simpler, but PPO_34 showed this allows parameter-conditioned scripting.
+
+**Recommendation:** Continuous. Start conservative — every 120-600 frames, perturb only ball position (not paddle or bricks). Tune frequency and magnitude based on early training metrics.
+
+#### Decision 4: Perturbation Parameters
+
+| Parameter | Proposed starting value | Rationale |
+|-----------|------------------------|-----------|
+| Teleport probability | 0.3 (30% chance per trigger) | Matches intervention test |
+| Ball Y jitter (σ) | 15 pixels | Matches intervention test |
+| Paddle X jitter (σ) | 30 pixels | Matches intervention test |
+| Trigger interval | 120-600 frames (uniform) | 2× wider than DynamicBreakout — ALE may need gentler perturbation |
+
+**Recommendation:** These are starting points. The intervention test parameters are proven to distinguish sighted from blind policies. Tune if early training shows drowning (reduce probability/magnitude) or memorization (increase both).
+
+#### Decision 5: Training Configuration
+
+Same recipe that worked across 43 runs:
+```python
+n_envs=32, batch_size=1024, n_steps=128, n_epochs=4
+gamma=0.99, ent_coef=0.006, vf_coef=0.5
+learning_rate=linear_schedule(2.5e-4, 1e-5)
+clip_range=linear_schedule(0.2, 0.05)
+policy=DropoutNatureCNN(dropout_p=0.1)  # proven entropy stabilizer
+```
+
+Use `make_atari_env("ALE/Breakout-v5", n_envs=32, env_kwargs={"repeat_action_probability": 0.0})` — NO sticky actions. We're testing whether dynamics randomization alone forces reactivity.
+
+**Open question:** Should we keep `frameskip=4` (ALE default) or use `frameskip=1` (no frame skip)? Frame skip affects training speed 4×. PPO_35 trained on a custom engine with no frame skip. **Recommendation:** frameskip=4 for first experiment (matches ALE convention, 4× faster training). Test frameskip=1 in a follow-up if results are promising.
+
+#### Decision 6: Evaluation Protocol
+
+Two environments, identical observation pipeline (GrayscaleResize 84×84, VecFrameStack 4):
+
+1. **Standard eval:** `ALE/Breakout-v5` with `repeat_action_probability=0.0`, `frameskip=4` — NO `setRAM()` wrapper. Real Atari, real rules. Used for EvalCallback and final benchmarking.
+2. **Intervention eval:** Same ALE environment plus `InterventionWrapper` (ball/paddle teleportation after 30% of paddle bounces). Measures whether the policy is sighted or blind.
+
+Evaluation checkpoints at 50M, 100M, 200M, 400M steps: `eval_reactivity.py` (det=True + det=False) on standard eval, `eval_intervention.py` on intervention eval.
+
+#### Decision 7: First Experiment Design
+
+**Single-model reproduction test.** Train one model on ALE with ball-teleportation randomization. Target 400M steps.
+
+| Condition | Training | Evaluation |
+|-----------|----------|------------|
+| **PPO_44** (proposed) | ALE + continuous ball teleportation | ALE standard (no teleport) |
+
+**Comparison baselines (already trained):**
+| Model | Training | Expected on ALE |
+|-------|----------|-----------------|
+| PPO_26 | ALE, non-sticky→sticky | Blind script (confirmed memorized on ALE) |
+| PPO_27 | ALE, sticky from scratch | Noise-dependent collapse |
+| PPO_35 | Custom engine, continuous physics | Sighted on custom engine; untested on ALE |
+
+**Success criteria:**
+| Outcome | Intervention retention | Interpretation |
+|---------|----------------------|----------------|
+| SUCCESS | >30% | Sighted policy on authentic ALE — dynamics randomization finding validated |
+| PARTIAL | 15-30% | Some reactivity but weaker than custom engine. Physics differences matter. |
+| FAILED | <15% | Blind script. ALE physics resist this form of randomization. Try different perturbation. |
+
+**Falsification condition:** "The dynamics-randomization→reactivity relationship would be disproven on ALE if PPO_44, trained with ball teleportation on ALE, shows <15% score retention under the intervention test."
+
+### Implementation Order
+
+1. **RAM probe script** — verify Breakout RAM addresses (30 min)
+2. **`ALEBreakoutTeleport` wrapper** — Gymnasium wrapper, ball-only teleportation (1-2 hours)
+3. **Integration test** — 5M-step quick training run to verify wrapper doesn't crash/env is stable (2-4 hours)
+4. **`train_ppo44.py`** — full training script with MemorizationCheckCallback (correct env!), eval_reactivity checkpoints (30 min)
+5. **400M-step training run** — ~2 weeks on RTX 3060 Ti
+6. **Evaluation** — eval_reactivity.py + eval_intervention.py at checkpoints
+
+### Open Questions for the New Session
+
+1. Does `ALE.setRAM()` work reliably on Windows with `ale-py`? Test before building the wrapper.
+2. Are the OCAtari RAM addresses (paddle=72, ball_x=99, ball_y=101) correct for ALE/Breakout-v5? Verify with probe script.
+3. Is ball velocity stored in RAM (writable) or ROM (read-only)? Determines whether velocity injection is possible.
+4. Should we keep `frameskip=4` for training speed, or use `frameskip=1` to match the custom engine's frame-by-frame training?
+5. Is the intervention test environment (teleportation wrapper on ALE) implementationally different enough from the training wrapper to avoid "training on the test"? They should use the same code path but different trigger conditions.
+
+---
+
 **SUMMARY — Three experiments testing sticky actions in Breakout RL:**
 - **Experiment 1 (COMPLETE — key finding overturned 2026-07-14):** PPO_25 (no sticky) vs PPO_26 (deep pretraining + sticky) vs PPO_27 (fresh + sticky). **PPO_26 CONFIRMED MEMORIZED by nosticky verification (2026-07-14).** Without sticky actions: Game 1 = 67 pts, Games 2+ = every game exactly 60.0 points, 264 frames — a fixed script. PPO_26's sticky-on performance (avg 54.3, 0% zero-score) was noise-masked memorization, identical to PPO_30b/PPO_31b. **The "both ingredients" recipe does NOT produce generalization — it produces better memorized scripts.** PPO_27 (sticky from scratch, p=0.25) remains the only model trained with stochasticity throughout — and it was the worst single-env performer. **Revised conclusion:** non-sticky pretraining causes permanent memorization that no amount of sticky fine-tuning has ever cured. Deep pretraining produces higher-scoring scripts (PPO_26: 60 pts > PPO_31b: 31 pts > PPO_30b: 0 pts) but never reactive policies.
 - **Experiment 2 (COMPLETE):** PPO_28/29 — removed sticky actions from trained models. **Finding:** both collapsed to fixed open-loop action sequences within ~30M steps. Training metrics (EV, value_loss, entropy) lied during collapse. Sticky actions are required at inference time, not just during training.
