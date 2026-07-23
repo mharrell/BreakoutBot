@@ -164,11 +164,21 @@ class MemorizationCheckCallback(BaseCallback):
         return check_env
 
     def _run_episodes(self, env, deterministic, label_suffix=""):
-        """Run self.n_games episodes and return (scores, elapsed_seconds)."""
+        """Run self.n_games episodes and return (scores, elapsed_seconds).
+
+        Accumulates per-frame rewards into a game_score total. When the game
+        ends (lives==0), the accumulated total is recorded. This works
+        regardless of whether the env pipeline includes EpisodicLifeEnv.
+        With EpisodicLifeEnv: done=True on each life loss, autoreset handles
+        respawn. Accumulated game_score correctly sums across all lives.
+        Without EpisodicLifeEnv: done=True only on game over, game_score is
+        the full game total.
+        """
         obs = env.reset()
         scores = []
         episode = 0
         steps_taken = 0
+        game_score = 0.0
         start_time = time.time()
 
         mode_label = "det=True" if deterministic else "det=False"
@@ -180,13 +190,14 @@ class MemorizationCheckCallback(BaseCallback):
             action, _ = self.model.predict(obs, deterministic=deterministic)
             obs, reward, done, info = env.step(action)
             steps_taken += 1
+            game_score += float(reward[0]) if hasattr(reward, '__iter__') else float(reward)
 
             if done[0]:
                 lives = info[0].get("lives", -1)
                 if lives == 0:
-                    score = float(info[0].get("episode", {}).get("r", 0))
-                    scores.append(score)
+                    scores.append(round(game_score, 1))
                     episode += 1
+                    game_score = 0.0
                     obs = env.reset()
                 else:
                     # Life lost — fire to respawn

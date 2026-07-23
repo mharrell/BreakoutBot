@@ -1,55 +1,32 @@
 # Experiments
 
-## Project Direction — July 19, 2026
+## Project Direction — July 23, 2026
 
 ### Where We Are
 
-After 43 PPO runs, billions of training steps, and a custom Breakout engine, we have one finding that has survived every test: **dynamics randomization forces policies to maintain action-distribution entropy, and that entropy produces behavior that is genuinely responsive to game state.** The intervention test (teleporting the ball mid-game and measuring whether the policy adapts) confirms this: PPO_35, trained with continuous mid-game physics changes, retains 47% of its normal score under teleportation, while all noise-only models collapse to 8-26%.
+After 58+ PPO runs and a return to authentic ALE Breakout, we have confirmed that **dynamics randomization via `setRAM()` sustains policy entropy but does not prevent argmax memorization.** Y-perturb (ball Y-axis perturbation via `setRAM(101)`, ±8px, cooldown=30f, prob=10%) produces the same pattern on ALE that PPO_35 showed on the custom engine: det=False maintains healthy score diversity (8-15 unique, avg 10-14), but det=True collapses to a single memorized argmax script by 12-16M steps.
 
-We also know what doesn't work: sticky actions mask memorization with noise but don't prevent it (confirmed across 6 models); perceptual noise alone produces brittle scripts; more network capacity doesn't help; and linear LR decay works against dissolution by starving the policy of the update magnitude needed to resist script attractors.
+The custom-engine-to-ALE transfer gap (L-007, 99.1% score drop) is now bypassed — we train and evaluate on ALE directly. But the fundamental pattern persists: dynamics randomization produces argmax-script + policy-entropy, not genuine reactive ball-tracking.
 
-### The Gap
+We also now know that **entropy coefficient does not prevent argmax collapse.** Every value from 0.006 (baseline) through 0.10 (16.7×) produces the same result: the argmax concentrates on a fixed script. Entropy widens the action distribution but does not shift its mode. PPO's optimizer always finds the argmax that maximizes expected return, and that argmax is always a memorized script when scripts are viable in the environment.
 
-Every finding above was produced on `breakout_env_vendor` — a 238-line from-scratch Breakout clone. It lacks real Atari Breakout's ball speed-up mechanic, uses different ball geometry (5×2 vs ~2×2 pixels), has simplified paddle physics, and renders with custom sprites. We don't know how much of what we've observed is about Breakout versus about our Breakout approximation.
+### What We've Confirmed on ALE
 
-This wasn't a mistake — it was a pragmatic tradeoff. ALE doesn't expose physics parameters for modification, and we needed controllable randomization to test hypotheses quickly. The custom engine served that purpose. But the findings are worth verifying against the real game.
+- **Y-perturb via setRAM(101) works technically.** RAM address 101 (ball Y) is reliable on ALE v0.11. The cooldown mechanism is stable across billions of training steps.
+- **10% perturbation sustains det=False diversity but does not prevent det=True memorization.** Three independent replicates (PPO_55/57/58) confirm this.
+- **Run-to-run variance is real.** Identical configs with different seeds produce meaningfully different score trajectories. Single-replicate conclusions are unreliable.
+- **Entropy is not the lever.** ent_coef = 0.006, 0.01, 0.02, 0.025, 0.04, 0.10 — all produce SINGLE_SCRIPT on det=True.
+- **X-mirror (ball X reflection via setRAM 99) with cooldown** shows similar pattern to Y-perturb: INCOMPLETE det=True (env bug — actual behavior unknown), det=False diverse.
 
-### The Shift
+### What We're Testing Next
 
-We're returning to ALE. Two things make this possible now that weren't obvious when we started:
+**Higher perturbation probability.** At 10%, a memorized script experiences ~2-3 perturbations per game. At 25%, ~5-6. At 50%, ~8-9. At some probability threshold, scripts should become non-viable because the timed paddle position is wrong too often.
 
-1. **`ALE.setRAM(addr, value)`** (since ALE v0.7.0, 2021) lets us write directly to the Atari's 128 bytes of RAM at runtime. We can perturb ball position, paddle state, brick layout, and game variables on the real Atari ROM without ROM modification.
+Two fresh runs proposed: **prob=0.25** and **prob=0.50**, keeping cooldown=30, ±8px range, ent_coef=0.006. Target 50M steps each.
 
-2. **OCAtari's verified RAM map** gives us the exact addresses for Breakout's game objects — paddle X (RAM 72), ball X/Y (RAM 99/101), score (76-77), lives (57), and brick state (RAM 0-35).
+### Infrastructure Lessons
 
-This means we can implement dynamics randomization on authentic ALE Breakout — ball teleportation, paddle perturbations, brick randomization, velocity injection — using the real game's physics, rendering, and mechanics. The ball will speed up as bricks break. The paddle will have real Atari acceleration. The visuals will be what the CNN would see on real hardware.
-
-### What We're Keeping
-
-- **The design insight**: environment dynamics randomization, not output perturbation, forces responsive behavior
-- **The diagnostic toolkit**: `eval_reactivity.py`, the intervention test, distribution shape analysis
-- **The methodology lessons**: nosticky/sticky-off verification, calibration baselines, the danger of interpreting score diversity as behavioral diversity
-- **The dropout mechanism**: latent-space dropout as an entropy stabilizer (proven in PPO_36 vs PPO_37 ablation)
-
-### What Changes
-
-- **Training environment**: ALE Breakout with `setRAM()`-based randomization wrapper replaces `DynamicBreakout`
-- **Evaluation**: ALE Breakout with standard defaults (no `setRAM` perturbations) — real Atari, real rules
-- **The transfer question disappears**: we train on ALE, we evaluate on ALE. No sim-to-real gap.
-- **Experiment 10 (PPO_41/42/43)**: continues on the custom engine for the LR hypothesis, but new experiments launch on ALE
-
-### What We're Not Doing
-
-- **Not calling the custom-engine work a mistake.** It was the fastest path to testing dynamics-randomization hypotheses, and it produced genuine insights. The intervention test showing PPO_35 adapts to teleportation is a real result — it just needs ALE validation.
-- **Not abandoning dynamics randomization.** The insight is sound. We're upgrading the test environment, not the hypothesis.
-- **Not building an ALE-compatible renderer for the custom engine.** That would fix the visual gap while leaving the physics gap untouched. It's the wrong half of the problem.
-
-### Next Steps
-
-1. **Kill Experiment 10 (PPO_41/42/43)** — ✅ DONE. The LR hypothesis was developed on the custom engine. If it matters, it will surface in ALE training.
-2. **Build `ALEBreakoutRandomized`** — a Gymnasium wrapper around ALE Breakout that uses `setRAM()` to inject dynamics perturbations. **Plan below.**
-3. **Reproduce PPO_35's reactivity pattern on ALE** — train with ALE dynamics randomization, test with intervention.
-4. **Clean up project** — ✅ DONE. Removed dead models (35 dirs, ~14GB), videos, stale scripts, TensorBoard logs, console logs. Kept PPO_25-27 (ALE baselines) and PPO_34-36 (custom engine key results).
+An env pipeline bug (`make_check_env` missing `EpisodicLifeEnv` and `AutoResetWrapper`) produced 18+ consecutive false INCOMPLETE det=True verdicts for PPO_55b, which were interpreted as a breakthrough ("no functional deterministic policy"). The MemorizationCheckCallback's autoreset logic requires EpisodicLifeEnv to detect game-over; without it, 0 games complete within max_check_steps. All 14 active training scripts have been fixed. See Experiment 4b-ERRATA below.
 
 ---
 
@@ -966,6 +943,236 @@ If PPO_26 nosticky confirms generalization, Option A still answers the important
 4. **Compare against PPO_30b and PPO_31b** at matched 400M total steps
 5. **Compute bootstrap CIs** on all mean/median/zero-score comparisons
 6. **Update FLAWS.md** with any new issues discovered
+
+---
+
+---
+
+## Experiment 4b: Y-Perturb on ALE — Ball Y-Axis Perturbation via setRAM()
+
+### Background
+
+After confirming the GymBreakout-to-ALE transfer gap (L-007), the project returned to authentic ALE Breakout using `setRAM()` for dynamics randomization. Paddle-bounce teleport (PPO_44-46) failed because it punished hitting the ball — models learned avoidance. Mid-flight teleport at 60-80% (PPO_47-48) was too chaotic. X-mirror at high rates (PPO_49-50, 60-80%) also failed.
+
+The breakthrough was the **cooldown mechanism**: guarantee N frames of clean trajectory between perturbations so the policy can observe normal physics most of the time. X-mirror with cooldown (PPO_51-53) showed promise: PPO_53 (5% prob, 60f cooldown) reached det=False 12.8 avg / 20 best.
+
+Y-perturb addresses a different axis: instead of reflecting ball X (which changes horizontal trajectory), perturb ball Y position mid-flight. This targets the **timing** axis of memorized sequences — a script that expects the ball at Y=80 on frame 150 breaks when the ball is suddenly at Y=88.
+
+### Design
+
+`ALEBreakoutYPerturb` wrapper:
+- Reads ball Y from `setRAM(101)`
+- Only perturbs when ball is in flight: Y ∈ [30, 130] (valid playfield, excludes pre-launch Y=0 and paddle zone)
+- Perturbation: ±8 pixel random offset applied to ball Y
+- Cooldown: 30 frames between perturbations (guarantees clean trajectory segments)
+- Probability: 10% chance per eligible frame after cooldown expires
+- Independent cooldown from X-mirror (when combined)
+
+Environment pipeline:
+```
+ALE/Breakout-v5 (frameskip=1, repeat_action_probability=0)
+  → NoopResetEnv → ALEBreakoutYPerturb → FireResetEnv
+  → EpisodicLifeEnv → GrayscaleResize(84,84) → ClipRewardEnv → Monitor
+```
+
+Training: 32 envs, NatureCNN, LR 2.5e-4 → 1e-5 linear, clip 0.2 → 0.05 linear, ent_coef=0.006, batch_size=1024. Target 50M steps.
+
+Evaluation: clean ALE/Breakout-v5 (frameskip=4, no perturbation). MemorizationCheckCallback with det=True + det=False every 1M steps (initially 10M, changed to 1M after early collapse detection).
+
+### Results
+
+#### Y-Only Baseline (PPO_55 — default seed)
+
+| Milestone | det=True | det=False | Notes |
+|-----------|----------|-----------|-------|
+| 1-9M | Mostly INCOMPLETE (early training) | Improving steadily | |
+| 10M | 0 games (INCOMPLETE) | **9 unique, avg 11.6, best 16** | det=False peak |
+| 12-16M | SINGLE_SCRIPT, 9-15 pts | 7-10 unique | Argmax collapses |
+| 16-50M | SINGLE_SCRIPT throughout | 8-15 unique, avg 8-14 | Sustained diversity |
+
+Final at 48M: det=True SINGLE_SCRIPT 15 pts, det=False 10 unique, avg 9.5, best 17.
+
+**PPO_55 established the baseline:** Y-perturb at 10% produces the same argmax-script + policy-entropy pattern seen on GymBreakout. det=False peaks around 10M, det=True collapses by 12-16M.
+
+#### Y-Only Replicate (PPO_57 — seed=57)
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 10M | INCOMPLETE | 10 unique, avg 11.2, best 17 |
+| 20M | SINGLE_SCRIPT | 12 unique, avg ~14, best ~24 |
+| 48M | SINGLE_SCRIPT | 12 unique, avg ~14, best ~24 |
+
+Confirmed: 10M det=False peak, stronger scores than PPO_55.
+
+#### Y-Only Replicate (PPO_58 — seed=58)
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 10M | INCOMPLETE | 7 unique, avg 7.7, best 12 |
+| 20M | SINGLE_SCRIPT | 9 unique, avg 10.7, best 19 |
+| 48M | SINGLE_SCRIPT ~11-13 pts | 12 unique, avg ~11, best ~24 |
+
+Confirmed run-to-run variance: weaker early peak than 55/57, caught up by 48M.
+
+#### X+Y Combined (PPO_54 — killed)
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 21M | SINGLE_SCRIPT | Script |
+
+Dual 10% X+Y was too disruptive. Killed at 22.4M.
+
+#### X+Y Gentle (PPO_56 — killed)
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 16M | SINGLE_SCRIPT 4 pts | Dead script |
+
+X+Y at 5%/60f was too gentle. Stuck at 4-point script. Killed at 16M.
+
+### Key Findings
+
+1. **Y-perturb at 10% does not prevent argmax memorization on ALE.** Three independent replicates confirm: det=True collapses to SINGLE_SCRIPT by 12-16M, det=False sustains diversity through 50M.
+
+2. **Run-to-run variance is real and meaningful.** PPO_55, 57, and 58 — identical configs, different seeds — produced different peak timing, score magnitudes, and diversity levels. Single-replicate conclusions are unreliable.
+
+3. **10M det=False peak is independently confirmed.** All three replicates showed peak diversity around 10M steps. The mechanism is unknown but the phenomenon is real.
+
+4. **X-mirror with cooldown produces similar pattern to Y-perturb.** PPO_51 (10%/30f) and PPO_53 (5%/60f) show det=False diversity comparable to Y-only. *Note: PPO_51/53's INCOMPLETE det=True verdicts are suspect (same env bug as 55b — see 4b-ERRATA).*
+
+5. **Combined X+Y at 10% is counterproductive.** The combined perturbation rate (~20% total) degrades det=False scores and doesn't prevent memorization.
+
+### Status
+
+**COMPLETE.** All runs finished or killed. PPO_55/57/58 completed at 48-50M. PPO_54/56 killed. See Experiment 4c for entropy intervention from PPO_55's 9.6M checkpoint.
+
+---
+
+## Experiment 4c: Entropy Intervention — Dose-Response Curve
+
+### Motivation
+
+PPO_55 showed a det=False diversity peak at 10M steps (9 unique, avg 11.6, best 16). The det=True argmax collapsed to SINGLE_SCRIPT by 12-16M. The question: could raising the entropy coefficient (`ent_coef`) before the collapse prevent the argmax from concentrating?
+
+Six variants were launched from PPO_55's 9.6M checkpoint (the closest available to the 10M peak):
+
+| Variant | ent_coef | Multiplier | Hypothesis |
+|---------|----------|------------|------------|
+| PPO_55a | 0.010 | 1.67× | Mild entropy delays collapse |
+| PPO_55b | 0.020 | 3.33× | Moderate entropy prevents collapse |
+| PPO_55c | 0.040 | 6.67× | Aggressive entropy forces diversity |
+| PPO_55d | 0.025 | 4.17× | Upper sweet-spot probe |
+| PPO_55e | 0.100 | 16.7× | Extreme probe — can PPO concentrate against ANY entropy? |
+| PPO_57b | 0.020 | 3.33× | Replicate of 55b from PPO_57 source (different initial weights) |
+
+All other parameters identical: Y-perturb cooldown=30, prob=0.10, ±8px. Target 50M total steps.
+
+### Results
+
+#### 55a (ent=0.01, mild)
+
+Collapsed to SINGLE_SCRIPT at 16.6M. Killed at 22.4M. 1.67× baseline — no effect.
+
+#### 55b (ent=0.02, moderate)
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 9.6-28.6M | INCOMPLETE × 18 | 8-14 unique, avg 7-15, best up to 28 |
+| 28.6M | SINGLE_SCRIPT 25 pts | 13 unique, avg 11.7, best 23 |
+| 28.6-42.4M | SINGLE_SCRIPT throughout | 9-12 unique, avg 10-15 |
+
+**The 18 consecutive INCOMPLETE det=True verdicts were a false signal — see 4b-ERRATA below.** After the env fix, det=True completed on every check and was always SINGLE_SCRIPT. The model was memorized from the start; the env bug just hid it.
+
+#### 55c (ent=0.04, aggressive)
+
+Collapsed to SINGLE_SCRIPT at 14.6M. Killed at 25.6M. **Higher entropy collapsed faster than 55b — counter to the hypothesis.**
+
+#### 55d (ent=0.025, upper probe)
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 9.6-24.2M | All INCOMPLETE pre-fix, SINGLE_SCRIPT post-fix | 10-14 unique, avg 8-15 |
+| 22.2M | SINGLE_SCRIPT 33 pts | 10 unique, avg 14.5, best 26 |
+
+Caught the highest det=True script score in the project (33 pts). Running when stopped.
+
+#### 55e (ent=0.10, extreme — 16.7×)
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 9.6M (source) | SINGLE_SCRIPT 15 pts | 11 unique, avg 13.7, best 19 |
+| 10.6M | SINGLE_SCRIPT 11 pts | 10 unique, avg 6.5, best 11 |
+| 11.6M | SINGLE_SCRIPT 19 pts | 10 unique, avg 6.5, best 12 |
+
+**Collapsed on the very first post-entropy check.** Even 16.7× baseline entropy doesn't prevent argmax concentration. det=False scores are weak (avg 6.5 vs 12-14 for the 0.02 variants) — extreme entropy degrades the policy without preventing memorization.
+
+#### 57b (ent=0.02, PPO_57 source)
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 9.6-22.4M | Mostly SINGLE_SCRIPT | 12-15 unique, avg 11-15, **best 31** |
+
+The strongest single-game score in the project (31 pts, det=False). From PPO_57's stronger source weights. Running when stopped.
+
+### Cross-Variant Comparison
+
+| ent_coef | det=True outcome | det=False avg | det=False best | Collapse timing |
+|----------|-----------------|---------------|----------------|-----------------|
+| 0.006 (baseline) | SINGLE_SCRIPT | ~10-14 | ~24 | 12-16M |
+| 0.010 | SINGLE_SCRIPT | — | — | 16.6M |
+| 0.020 | SINGLE_SCRIPT | ~10-15 | ~28 | 28.6M (delayed by env bug) |
+| 0.025 | SINGLE_SCRIPT | ~8-15 | ~26 | Early (post-fix) |
+| 0.040 | SINGLE_SCRIPT | — | — | 14.6M (fastest) |
+| 0.100 | SINGLE_SCRIPT | ~6.5 | ~12 | Immediate (10.6M) |
+
+### Conclusion (CRITICAL)
+
+**Entropy coefficient does not prevent argmax collapse.** Every value from 0.006 to 0.10 (1× to 16.7× baseline) produces the same outcome: the argmax concentrates on a fixed script. The hypothesis that "sufficient entropy prevents memorization" is **FALSIFIED.**
+
+Entropy at 0.02-0.025 maintains healthier det=False diversity than baseline, suggesting it has a real effect on the policy distribution. But the mode (argmax) still collapses. Entropy widens the distribution; it doesn't shift the peak.
+
+At 0.10, the extreme entropy degrades det=False scores (avg 6.5 vs 12-14 for 0.02) without preventing memorization — the worst of both worlds. At 0.04, the collapse is actually *faster* than at lower values, suggesting very high entropy may destabilize training rather than prevent memorization.
+
+The fundamental issue is PPO's objective function: the argmax converges to the action with highest expected return in each state. If a fixed sequence of actions produces non-zero return consistently (which it does even under 10% perturbation), that sequence IS the optimal argmax. Entropy adds a bonus for distribution spread but doesn't change which action has the highest expected value. The optimizer finds the mode regardless of how wide the distribution is.
+
+### Status
+
+**COMPLETE.** All six entropy variants stopped on 2026-07-23. The entropy hypothesis is falsified. See Experiment 4d (next) for higher perturbation probability.
+
+---
+
+## 4b-ERRATA: The INCOMPLETE False Positive (July 22-23, 2026)
+
+### What happened
+
+PPO_55b showed 18+ consecutive INCOMPLETE det=True verdicts (0 games completed) from 9.6M through 37.6M steps. This was interpreted as evidence that the entropy-boosted model had no functional deterministic policy — the argmax couldn't even produce a FIRE action to launch the ball.
+
+This interpretation drove 3 days of experimental decisions: the claim was written to memory (`ppo55b-entropy-breaks-argmax-memorization.md`), interactive playback was built to investigate, and additional entropy variants (55d, 57b, 55e) were launched to probe the phenomenon.
+
+### What actually happened
+
+`make_check_env` was missing `EpisodicLifeEnv` and `AutoResetWrapper`. The `MemorizationCheckCallback._run_episodes` method has custom autoreset logic that relies on `info[0]["lives"]` to detect game-over. Without EpisodicLifeEnv:
+- `done[0]` only fires on actual game-over (all 5 lives lost) — but the callback's autoreset logic doesn't handle this case
+- Each `done[0]` → `env.reset()` via the VecEnv, which resets the ALE but requires FIRE to start
+- The callback's FIRE logic (`obs, _, _, _ = env.step([1])`) was designed for life-loss, not game-start
+- Result: 0 games completed within `max_check_steps` (200,000)
+
+After adding `EpisodicLifeEnv` and `AutoResetWrapper` to the pipeline, det=True completes 20/20 games on every check. PPO_55b's true det=True behavior: SINGLE_SCRIPT, ~13-25 pts. It was memorized all along.
+
+### Secondary bugs discovered simultaneously
+
+1. **Score accumulation bug:** `_run_episodes` read `info[0]["episode"]["r"]` at game-over, but with EpisodicLifeEnv this is only the LAST life's score. Fixed to accumulate per-frame rewards into a full-game total.
+
+2. **Missing resume logic:** All six entropy variant scripts (55a/b/c/d/e, 57b) lacked `get_latest_checkpoint()` and resume logic. On every restart, they reloaded from the 9.6M source checkpoint, silently discarding all training progress. Fixed by adding resume logic.
+
+3. **Checkpoint save cadence:** Checkpoints save every 100k model steps = 3.2M timesteps (with 32 envs). The 10M peak checkpoint wasn't available; closest was 9.6M. This gap means we can never capture the exact peak.
+
+### Lessons
+
+1. **Infrastructure bugs compound quickly.** Three independent bugs were active simultaneously, each masking the others.
+2. **INCOMPLETE ≠ "no deterministic policy."** It means the callback can't complete games. This is almost always an env issue, not a policy property.
+3. **Verify infrastructure before interpreting anomalous signals.** The same pattern as F-001: a promising number is interpreted as confirmation before the test that would falsify it is run. Here, the test would have been "does det=True complete games in a properly configured env?"
+4. **The env pipeline is part of the experimental apparatus.** Wrapper ordering matters. Every training script should have its check env verified by inspecting at least one completed check with non-zero games_played.
 
 ---
 

@@ -1,187 +1,193 @@
 # Current State — BreakoutBot
 
-**Last updated: 2026-07-19 (logical audit conclusion)**
+**Last updated: 2026-07-23 (Y-perturb and entropy experiments complete)**
 
 ---
 
 ## TL;DR
 
-After 43 PPO runs, **no model in this project has ever genuinely generalized** to reactive ball-tracking in Breakout. Every model that appeared promising was found, on closer inspection, to be a memorized script or a noise-masked dead policy. The project's single largest risk — that the custom GymBreakout engine doesn't transfer to authentic Atari Breakout — has been **confirmed catastrophic**: PPO_35's 212-point GymBreakout argmax script scores **2 points** on ALE. The path forward is to return to authentic ALE Breakout using `setRAM()` for dynamics randomization, building on the project's hard-won diagnostic toolkit and the design insight that environment dynamics randomization (not perceptual noise, not sticky actions) is the right lever for forcing reactivity.
+After 58+ PPO runs, **no model in this project has ever genuinely generalized** to reactive ball-tracking in Breakout. The return to authentic ALE Breakout using `setRAM()` for dynamics randomization has produced the same pattern seen on the custom engine: det=False maintains score diversity while det=True collapses to a single memorized argmax script. Y-perturb (ball Y-axis perturbation via `setRAM(101)`, ±8px, cooldown=30f, prob=10%) sustains stochastic diversity but does not prevent the argmax from memorizing. Entropy coefficient increases from 0.006 up to 0.10 (16.7×) do not prevent argmax collapse — they only affect the quality of the resulting script. The next direction is higher perturbation probability (prob ≥ 0.25) to test whether more frequent perturbation makes memorized scripts non-viable.
+
+A critical infrastructure bug was discovered and fixed during this experimental cycle: `make_check_env` was missing `EpisodicLifeEnv` and `AutoResetWrapper`, causing the MemorizationCheckCallback to produce 18+ consecutive INCOMPLETE det=True verdicts for PPO_55b — all of which were false negatives. With the fix, det=True always completes and the true argmax behavior is visible from the first check. All training scripts have been updated.
 
 ---
 
 ## Claim Status Board
 
-Every major claim made in this project, with its current standing as of 2026-07-19.
-
 ### CONFIRMED — Supported by data
 
 | Claim | Evidence |
 |-------|----------|
-| Sticky actions mask memorization; they don't prevent it | Every sticky-trained model tested without sticky actions collapsed to a deterministic script (PPO_26, PPO_28, PPO_29, PPO_30b, PPO_31b) |
-| The MemorizationCheckCallback "GENERALIZING" verdict is invalid for sticky models | Dead policy + p=0.25 sticky = 8-14 unique scores. The verdict measures sticky probability, not policy quality. (F-001) |
-| Deep non-sticky pretraining produces higher-scoring memorized scripts, not generalization | PPO_26: 60 pts > PPO_31b: 31 pts > PPO_30b: 0 pts — all confirmed memorized (F-003, F-004) |
-| The intervention test does not distinguish reactive from dead | PPO_34 (dead argmax script) retains 49.6% vs PPO_35's 44.7%. Correlation = 0.000 for both. (L-001) |
-| GymBreakout findings do not transfer to ALE | PPO_35: GymBreakout 212 pts → ALE 2 pts (99.1% drop). (L-007) |
-| det=False score diversity exists in dead scripts | PPO_34 (dead): 19 unique det=False scores. PPO_35: 21. Identical signals. (L-012) |
+| Sticky actions mask memorization; they don't prevent it | Every sticky-trained model tested without sticky actions collapsed to a deterministic script |
+| The MemorizationCheckCallback "GENERALIZING" verdict is invalid for sticky models | Dead policy + p=0.25 sticky = 8-14 unique scores (F-001) |
+| Deep non-sticky pretraining produces higher-scoring memorized scripts, not generalization | PPO_26: 60 pts > PPO_31b: 31 pts > PPO_30b: 0 pts — all confirmed memorized |
+| The intervention test does not distinguish reactive from dead | PPO_34 (dead) retains 49.6% vs PPO_35's 44.7%. L-001. |
+| GymBreakout findings do not transfer to ALE | PPO_35: GymBreakout 212 pts → ALE 2 pts (99.1% drop). L-007. |
+| det=False score diversity exists in dead scripts | PPO_34 (dead): 19 unique det=False scores. L-012. |
+| Paddle-bounce teleport at 10-20% does not force reactivity | PPO_44/45/46: three dead scripts, ~0 mean score. Models learned avoidance. |
+| **Y-perturb at 10% does not prevent argmax memorization on ALE** | PPO_55/57/58: all det=True SINGLE_SCRIPT by 12-16M, det=False MULTIPLE_SCRIPTS sustained |
+| **Entropy coefficient does not prevent argmax collapse** | 55a (0.01), 55b (0.02), 55c (0.04), 55d (0.025), 55e (0.10) — all SINGLE_SCRIPT on det=True |
+| **INCOMPLETE det=True verdicts (July 22-23) were false positives from env mismatch** | make_check_env lacked EpisodicLifeEnv; callback never detected game-over. Fixed in all 14 scripts. |
+| **Run-to-run variance in memorization trajectory is real** | PPO_55/57/58: identical configs, different seed → different det=False peak timing and magnitude |
 
 ### TENTATIVE — Plausible but not confirmed
 
 | Claim | What's needed to confirm |
 |-------|------------------------|
-| Dynamics randomization forces reactive policies (the core design insight) | ALE replication. The insight was developed on the custom engine. Logic is sound but empirical proof on authentic Atari is absent. |
-| Dropout in feature space prevents frame-timing memorization | Ablation at matched step counts. PPO_37 (no dropout) was killed before reaching PPO_36's step count. Single-pair comparison, not replicated. |
-| Frame-level ball noise (σ=0.3) makes scripting worse than tracking | ALE replication. All ball-noise experiments were on the custom engine. |
-| Per-episode physics randomization prevents memorization | ALE replication. PPO_34 tested on custom engine only. |
+| Higher perturbation probability (≥0.25) makes memorized scripts non-viable | Train PPO at prob=0.25 and prob=0.50; if det=True shows MULTIPLE_SCRIPTS, confirmed |
+| The argmax-script + policy-entropy pattern (det=True script, det=False diverse) is the universal outcome of moderate dynamics randomization | More perturbation types beyond Y-axis position needed to establish generality |
+| The det=False score peak at ~10M is a real phenomenon across runs | Confirmed across PPO_55/57/58 but mechanism still unknown |
 
 ### FALSIFIED — Proven wrong
 
 | Claim | How it was falsified |
 |-------|---------------------|
-| "PPO_35 is the first non-memorized model" (original 2026-07-15 claim) | Dead-model calibration shows identical signals. Intervention test doesn't distinguish. PPO_35 is an argmax script. ALE cross-eval: 2 points. (L-001, L-002, L-007) |
-| "PPO_35's 47% intervention retention proves sighted behavior" | PPO_34 (dead) retains 49.6%. A dead script produces the same retention. Not evidence of reactivity. (L-001) |
-| "PPO_30b GENERALIZING" (MemorizationCheckCallback verdict) | Nosticky verification: 99.8% zero scores, 2 unique scores. Sticky noise, not generalization. (F-001) |
-| "PPO_31b GENERALIZING" | Nosticky verification: all 31-point script. (F-001) |
-| "PPO_26 generalizes — both ingredients (pretraining + sticky) work" | Nosticky verification: 60 pts × 500 games, 264 frames. (F-003) |
+| "PPO_35 is the first non-memorized model" | Dead-model calibration shows identical signals. ALE cross-eval: 2 points. |
+| "PPO_30b/31b GENERALIZING" | Nosticky verification: both collapse to ≤2 unique scores. Sticky noise, not generalization. |
+| "PPO_26 generalizes" | Nosticky: every game = 60.0 pts, 264 frames — a fixed script. |
+| **"PPO_55b has no functional deterministic policy" (18+ INCOMPLETE checks)** | Env mismatch artifact. With fixed env, det=True completes on every check and is always SINGLE_SCRIPT. |
+| **"ent_coef ≥ 0.02 prevents argmax collapse"** | 55b (0.02), 55d (0.025), 55c (0.04), 55e (0.10) all collapsed to SINGLE_SCRIPT. The argmax concentrates regardless of entropy coefficient. |
 
 ---
 
 ## Model Roster
 
-### Confirmed Memorized (nosticky verification)
+### ALE Return — Y-Perturb Experiments (Current Generation)
+
+All use ALE/Breakout-v5 + `ALEBreakoutYPerturb` (setRAM 101, ±8px, cooldown=30f).
+Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_coef=0.006 (except entropy variants).
+
+#### Y-Only Baseline Replicates
+
+| Model | Seed | Target | Final Step | det=True | det=False (final) | Notes |
+|-------|------|--------|------------|----------|-------------------|-------|
+| PPO_55 | default | 50M | 48M | SINGLE_SCRIPT ~15 pts | 10 unique, avg 9.5, best 17 | First Y-only. det=False peak at 10M: 9 unique, avg 11.6, best 16 |
+| PPO_57 | 57 | 50M | 48M | SINGLE_SCRIPT | 12 unique, avg ~14, best ~24 | Stronger det=False than PPO_55. Confirmed 10M peak. |
+| PPO_58 | 58 | 50M | 48M | SINGLE_SCRIPT ~11-13 pts | 12 unique, avg ~11, best ~24 | Third replicate. Classic pattern. |
+
+**Finding:** Identical configs with different seeds produce meaningfully different score trajectories. The 10M det=False diversity peak is independently confirmed. All three converge to argmax scripts by 12-16M.
+
+#### X-Mirror and Combined (Ablation — Killed)
+
+| Model | Perturbation | Final Step | Outcome |
+|-------|-------------|------------|---------|
+| PPO_51 | X-mirror 10%, cooldown=30 | 48M | det=True INCOMPLETE* (env bug), det=False: 8 unique, avg 9.4, best 13 |
+| PPO_52 | X-mirror 20%, cooldown=30 | 12M | Killed early — 20% too aggressive |
+| PPO_53 | X-mirror 5%, cooldown=60 | 48M | det=True INCOMPLETE* (env bug), det=False: 12 unique, avg 12.8, best 20 |
+| PPO_54 | X+Y combined, 10% each, c=30 | 22.4M | Killed — SINGLE_SCRIPT at 21M, dual 10% too disruptive |
+| PPO_56 | X+Y gentle, 5% each, c=60 | 16M | Killed — stuck at 4 pts SINGLE_SCRIPT |
+
+**Finding:** X-mirror with cooldown (PPO_51/53) shows same det=False diversity as Y-perturb. PPO_53 (5%/60f) hit det=False best=21 — strong for an X-only perturbation. *PPO_51 and 53's INCOMPLETE det=True verdicts are suspect (same env bug as PPO_55b); their true argmax behavior is unknown. X+Y combined at 10% is too disruptive. X+Y at 5% is too gentle.
+
+#### Entropy Intervention (from PPO_55 9.6M checkpoint)
+
+| Model | ent_coef | Multiplier | Final Step | det=True | det=False (final) |
+|-------|----------|------------|------------|----------|-------------------|
+| PPO_55a | 0.010 | 1.67× | 22.4M | SINGLE_SCRIPT by 16.6M | Collapsed. Killed. |
+| PPO_55b | 0.020 | 3.33× | 42.4M | SINGLE_SCRIPT ~13-25 pts | 9-12 unique, avg 10-14, best 23. Running when stopped. |
+| PPO_55c | 0.040 | 6.67× | 25.6M | SINGLE_SCRIPT by 14.6M | Collapsed. Killed. |
+| PPO_55d | 0.025 | 4.17× | 24.2M | SINGLE_SCRIPT ~15-33 pts | 10-13 unique, avg 8-15, caught 33-pt script. Running when stopped. |
+| PPO_55e | 0.100 | 16.7× | 12.8M | SINGLE_SCRIPT on first 3 checks | 10 unique, avg 6.5. Extreme probe. Running when stopped. |
+| PPO_57b | 0.020 | 3.33× | 22.4M | SINGLE_SCRIPT ~14-23 pts | 12-13 unique, avg 11-15, **best 31** (project single-game record). From PPO_57 source. |
+
+**Finding (CRITICAL):** No entropy coefficient tested (0.01 through 0.10) prevents argmax collapse. The hypothesis that "sufficient entropy prevents memorization" is FALSIFIED. Entropy at 0.02-0.025 delays the collapse slightly and maintains healthier det=False diversity, but the argmax still concentrates. PPO_55e at 0.10 (16.7×) collapsed by the first post-entropy check at 10.6M — 3 checks, all SINGLE_SCRIPT.
+
+**The INCOMPLETE false positive:** PPO_55b's 18+ consecutive INCOMPLETE det=True verdicts (which prompted the "no functional deterministic policy" claim) were caused by `make_check_env` missing `EpisodicLifeEnv` and `AutoResetWrapper`. The callback's custom autoreset logic never detected game-over, so 0 games completed within `max_check_steps`. After the fix, det=True completes on every check. The INCOMPLETE signal was an infrastructure bug, not a policy property.
+
+#### Mid-Flight Teleport (Early ALE Return — Killed/Superseded)
+
+| Model | Approach | Final Step | Outcome |
+|-------|----------|------------|---------|
+| PPO_44 | Paddle-bounce teleport 10% | 38.4M | Dead. mean=0.0. Killed. |
+| PPO_45 | Paddle-bounce teleport 15% | 48M | Dead. mean=0.4. Full run. |
+| PPO_46 | Paddle-bounce teleport 20% | 41.6M | Dead. mean=0.0. Killed. |
+| PPO_47 | Mid-flight teleport 60% | 9.6M | Killed early — superseded by Y-perturb |
+| PPO_48 | Mid-flight teleport 80% | 3.2M | Killed early — superseded by Y-perturb |
+| PPO_49 | Mid-flight teleport variant | 3.2M | Killed early |
+| PPO_50 | Mid-flight teleport variant | 3.2M | Killed early |
+
+### Confirmed Memorized (Historical — Nosticky Verification)
 
 | Model | Training | Nosticky result | Score |
 |-------|----------|----------------|-------|
-| PPO_25 | ALE, no sticky, 1B steps | Multiple scripts via eval cycling, single scripts per checkpoint | ~20-50 |
-| PPO_26 | ALE, PPO_25 pretrain + p=0.25 sticky | 60.0 pts × 500 games, 264 frames — single script | 60 |
-| PPO_27 | ALE, p=0.25 sticky from scratch, ~1B steps | 100% zero scores, 19-frame deaths — noise-dependent | 0 |
-| PPO_28 | ALE, sticky removed from trained model | Collapsed to fixed open-loop sequence within ~30M steps | varies |
-| PPO_29 | ALE, sticky removed from trained model | Collapsed to fixed open-loop sequence within ~30M steps | varies |
-| PPO_30b | ALE, 100M non-sticky → 300M p=0.25 sticky | 99.8% zeros, 2 unique scores | 0 |
-| PPO_31b | ALE, 300M non-sticky → 100M p=0.25 sticky | All 31-point script, 178 frames | 31 |
+| PPO_25 | ALE, no sticky, 1B steps | Multiple scripts via eval cycling | ~20-50 |
+| PPO_26 | ALE, PPO_25 pretrain + p=0.25 sticky | 60.0 pts × 500 games, 264 frames | 60 |
+| PPO_27 | ALE, p=0.25 sticky from scratch | 100% zero scores, noise-dependent | 0 |
+| PPO_28 | ALE, sticky removed from trained | Collapsed to fixed sequence | varies |
+| PPO_29 | ALE, sticky removed from trained | Collapsed to fixed sequence | varies |
+| PPO_30b | ALE, 100M non-sticky → 300M sticky | 99.8% zeros, 2 unique | 0 |
+| PPO_31b | ALE, 300M non-sticky → 100M sticky | All 31-point script, 178 frames | 31 |
 
-### Custom Engine — Confirmed Argmax Scripts (nosticky, det=True)
+### Custom Engine (Historical — Does Not Transfer to ALE)
 
-| Model | Approach | GymBreakout det=True | det=False | ALE (if tested) |
-|-------|----------|---------------------|-----------|-----------------|
-| PPO_34 | Per-episode physics randomization, 70M | 1 unique, 89.0 pts | 19 unique, 52.4 pts, UNCLEAR | — |
-| PPO_35 | Continuous mid-game physics, 268M | 1 unique, 212.0 pts | 21 unique, 113.0 pts, UNCLEAR | **1 unique, 2.0 pts** |
-
-### Custom Engine — Not Yet Evaluated with Full Protocol
-
-| Model | Approach | Steps | Notes |
-|-------|----------|-------|-------|
-| PPO_36 | Ball noise σ=0.3 + dropout p=0.1 | 99M | Checkpoints exist at 3.2M increments through 99.2M. Not cross-evaluated on ALE. |
-| PPO_33 | Frame skip randomization | 5 restarts | Original "phase transition at 15M" observation from lost run. |
-
-### Never Existed
-
-PPO_37 through PPO_43 were planned/designed but never trained beyond early steps (or were killed before producing checkpoints). PPO_41/42/43 were LR schedule experiments killed on 2026-07-19 to free GPU for ALE return.
+| Model | Approach | GymBreakout | ALE |
+|-------|----------|------------|-----|
+| PPO_34 | Per-episode physics randomization | 1 unique, 89 pts det=True | — |
+| PPO_35 | Continuous mid-game physics | 1 unique, 212 pts det=True | 1 unique, 2 pts |
+| PPO_36 | Ball noise σ=0.3 + dropout | 23 unique det=False at peak | — |
 
 ---
 
 ## What We've Learned
 
-### The hard way (things we believed, then disproved)
+### This experimental cycle (July 20-23, 2026)
 
-1. **Sticky actions don't work.** They were the standard literature recommendation (Machado et al. 2018). They mask memorization with noise; they don't prevent or cure it. Every sticky-trained model ever tested in this project collapsed without sticky actions.
+1. **Y-perturb via setRAM works technically.** Writing to RAM address 101 (ball Y) is reliable on ALE v0.11. The wrapper with cooldown mechanism is stable across billions of training steps.
 
-2. **Non-sticky pretraining causes permanent memorization.** Once a model memorizes during non-sticky pretraining, no amount of sticky fine-tuning has ever cured it. The model learns a fixed script during the deterministic phase and the sticky phase just adds noise around it.
+2. **10% perturbation is enough for det=False diversity, not enough for det=True reactivity.** The argmax finds a script that works on the 90% of frames where the ball isn't perturbed. The policy entropy produces diverse scores under sampling, but the mode (argmax) concentrates on a fixed sequence.
 
-3. **Score diversity is not reactivity.** Dead argmax scripts produce 8-21 unique scores under stochastic sampling (det=False). PPO_34 (confirmed dead) and PPO_35 produce indistinguishable score diversity. The only reliable behavioral test is nosticky verification: run the model without sticky actions and check for collapse to ≤2 unique scores.
+3. **Entropy is not the lever.** Every entropy coefficient from 0.006 to 0.10 produces the same outcome: argmax collapses to a script. Entropy widens the distribution but doesn't shift the mode. PPO's optimizer always finds the argmax that maximizes expected return, and that argmax is always a script when scripts are viable.
 
-4. **Intervention retention is not a reactivity metric without calibration.** A dead script that always moves the paddle to position X after a bounce will still score SOME points when the ball is teleported — the paddle doesn't disappear. PPO_34 (dead) retains 49.6% score under teleportation. Without a dead-model calibration baseline, retention percentages are uninterpretable.
+4. **Infrastructure bugs compound quickly.** The env mismatch (missing EpisodicLifeEnv) produced 18+ consecutive INCOMPLETE verdicts that were interpreted as a breakthrough ("no functional deterministic policy"). The resume-logic bug caused entropy variants to silently restart from 9.6M on every relaunch. The score accumulation bug reported per-life scores instead of per-game. All three bugs were active simultaneously, and the INCOMPLETE interpretation drove experimental decisions for 3 days.
 
-5. **The custom engine doesn't approximate ALE.** PPO_35 learned a 212-point argmax script on GymBreakout. The same policy scores 2 points on authentic Atari Breakout. The engines differ in rendering, physics, collision geometry, and frame timing in ways that make learned policies non-transferable.
+5. **Run-to-run variance matters.** PPO_55, 57, and 58 — identical configs, different random seeds — produced meaningfully different score trajectories. Single-replicate conclusions are unreliable.
 
-6. **Every new metric needs dead-model calibration.** The project has a recurring pattern: a new diagnostic is developed, run on the latest promising model, produces a number, and that number is interpreted as evidence of reactivity — without checking what a known-dead model produces on the same diagnostic. This happened with the intervention test, the shape classifier, and the MemorizationCheckCallback verdicts. Critical Rule #14 now requires calibration before any new metric is used to support claims.
+### The hard way (historical, still valid)
 
-### The right direction (things we believe and haven't disproven)
+1. **Sticky actions don't work.** They mask memorization with noise; they don't prevent it.
 
-1. **Dynamics randomization is the right lever.** Perturbing environment physics (ball speed, paddle width, frame timing) breaks timed scripts in a way that perceptual noise and action noise cannot. The logic is sound. What's missing is empirical proof on authentic ALE.
+2. **Non-sticky pretraining causes permanent memorization.** Once a model memorizes during deterministic training, sticky fine-tuning adds noise but doesn't cure it.
 
-2. **Diagnostic toolkit is robust.** Nosticky verification, det=True vs det=False comparison, bootstrap CIs on distribution metrics, and cross-environment evaluation — when applied *before* claims are written — would have caught every false positive in this project's history. The tools exist; the failure was in the sequence (claim first, verify later).
+3. **Score diversity is not reactivity.** Dead scripts produce diverse scores under stochastic sampling. The only reliable test is det=True nosticky verification.
+
+4. **Every new metric needs dead-model calibration.** This happened with the intervention test, the shape classifier, and the MemorizationCheckCallback. The INCOMPLETE false positive is the same pattern in a new form: an anomalous metric was interpreted as evidence of reactivity before the infrastructure producing it was verified.
+
+5. **The custom engine doesn't approximate ALE.** PPO_35: 212 pts → 2 pts. All custom-engine findings need ALE replication.
 
 ---
 
 ## What's Next
 
-### Immediate: ALE Return — First Experiment Spec
+### Immediate: Higher Perturbation Probability
 
-The project is returning to authentic ALE/Breakout-v5. Here is the concrete first experiment a new session can start building immediately.
+The central question after this cycle: at what perturbation probability do scripts become non-viable?
 
-#### Step 0: Verify RAM Addresses (30 min)
+**Design (presented for approval):**
+- Two fresh runs: **prob=0.25** (2.5× current) and **prob=0.50** (5× current)
+- Keep cooldown=30, ±8px range, ent_coef=0.006 — vary only probability
+- Fresh starts (not from checkpoint) — need full trajectories
+- Target 50M steps each
+- At 10%, a 60-point script (~264 frames) experiences ~2-3 perturbations. At 25%, ~5-6. At 50%, ~8-9. At some point the script's timed paddle positions are wrong too often.
 
-The addresses below are from OCAtari — they may be wrong for ALE v0.11. Write a probe script that sets each address and observes the effect:
+**Success criterion:** det=True shows MULTIPLE_SCRIPTS (3+ unique) at 50M steps on any replicate.
 
-```
-Expected (from OCAtari, UNVERIFIED):
-  Paddle X:    72    (write 0-191, observe paddle position)
-  Ball X:      99    (write 0-191, observe ball horizontal)
-  Ball Y:      101   (write 0-255, observe ball vertical)
-  Score:       76-77 (read-only verification)
-  Lives:       57    (read-only verification)
-```
+### If Higher Probability Also Fails
 
-Pattern: `env.unwrapped.ale.setRAM(addr, value)` — set before `env.step()`. Verify each address by writing known values and visually confirming. Update the address list in `ale-return-direction.md` memory with verified values.
+If even prob=0.50 produces argmax scripts, the next step is multi-parameter perturbation — randomize both X and Y simultaneously (currently Y-only). A ±8px X perturbation would require the script to track ball X position, not just Y timing. Combined with Y-perturb, this makes the script problem 2D rather than 1D.
 
-#### Step 1: Build `ALEBreakoutRandomized` Wrapper (1-2 hours)
+### If That Also Fails
 
-A `gym.Wrapper` around `ALE/Breakout-v5` (frameskip=1, repeat_action_probability=0) that supports the same intervention test as the GymBreakout version:
-
-- **Ball teleportation**: on paddle bounce, 30% probability, teleport ball to random X/Y via `setRAM()`
-- **No other randomization** — single variable for the first experiment
-- **Same preprocessing** as existing pipeline: GrayscaleResize(84,84), ClipRewardEnv, Monitor → DummyVecEnv → VecFrameStack(4)
-
-Reference pattern: `calibration_phase1.py` `InterventionBreakout` class (wraps GymBreakout, teleports ball). Same logic, different engine.
-
-#### Step 2: Calibrate on Known-Dead ALE Models (1 hour)
-
-Before training anything new, establish the ALE dead-model baseline. Run the intervention test on:
-- **PPO_26** (ALE-trained, confirmed memorized: 60 pts × 500 games nosticky)
-- **PPO_30b** (ALE-trained, confirmed memorized: 99.8% zeros)
-
-This gives us: "A known-dead ALE model retains X% under intervention." That's the calibration baseline that was missing for GymBreakout. Without it, intervention retention numbers are uninterpretable (see L-001).
-
-#### Step 3: Train Small Proof-of-Concept (1-2 days GPU)
-
-Train a NatureCNN PPO model on `ALE/Breakout-v5` with the teleportation wrapper from Step 1:
-
-- **Architecture**: NatureCNN (standard — no dropout yet, single variable)
-- **Training**: 32 envs, standard PPO hyperparams (matching train_ppo36.py defaults)
-- **Target**: ~50M steps — enough to see if the policy develops reactivity
-- **During training**: MemorizationCheckCallback with `make_env_fn` pointing to ALE (not GymBreakout — this time the callback env matches the training env)
-- **If the model memorizes (≤2 unique nosticky at 50M)**: teleportation alone isn't enough. Consider adding ball velocity perturbation or per-episode physics randomization (setRAM-based).
-- **If the model shows diversity (≥10 unique nosticky)**: run full Breakthrough Verification Protocol (all 6 gates, in order).
-
-#### Step 4: Full Verification (if Step 3 succeeds)
-
-- Gate 1: Both inference modes tested (det=True + det=False, 100 games)
-- Gate 2: Calibration baseline (Step 2 data)
-- Gate 3: Comparison baseline (compare against PPO_26)
-- Gate 4: Std column verified
-- Gate 5: Falsification pre-registered BEFORE claiming success
-- Gate 6: Environment match confirmed (training = ALE, eval = ALE)
-
-**Do not write the "first sighted ALE policy" claim until all 6 gates pass.** The project has 4 documented false positives from skipping gates (see Claim Status Board above).
+The fallback is to accept that PPO + NatureCNN on Breakout converges to scripts regardless of perturbation, and the real solution requires either:
+- A different architecture (e.g., transformer with attention over frames)
+- A different objective (e.g., inverse dynamics prediction as auxiliary loss)
+- A different game (Breakout may be structurally too simple to force reactive policies)
 
 ### For New Sessions
 
 See `CURRENT_STATE.md` (this file) first — then:
-1. `LOGICAL_AUDIT.md` — understand what reasoning patterns to avoid
-2. `FLAWS.md` — understand what methodological pitfalls exist
-3. `CLAUDE.md` — critical rules, conventions, diagnostic checklist
-4. `EXPERIMENTS.md` — full experiment history (with corrected claims)
+1. `EXPERIMENTS.md` — full experiment history including Experiment 4b and 4c
+2. `LOGICAL_AUDIT.md` — now 18 entries including L-017 (env mismatch false positive) and L-018 (entropy hypothesis falsification)
+3. `FLAWS.md` — 23 entries (F-022: env mismatch, F-023: missing resume logic)
+4. `CLAUDE.md` — critical rules, conventions, diagnostic checklist
 
 The Session Bootstrap in `CLAUDE.md` has the step-by-step procedure.
-
-### For Portfolio Reviewers
-
-This project demonstrates hands-on ML engineering with honest self-assessment. The key documents:
-- **This file** — current state and claim status
-- `LOGICAL_AUDIT.md` — 16-entry logical flaw catalog (3 confirmed with data)
-- `FLAWS.md` — 21-entry methodological flaw catalog
-- `EXPERIMENTS.md` — full experiment history with documented false positives
-- `RL_REFERENCE.md` — 31+ lessons learned, PPO parameter guide, metric diagnostics
-
-The story is not "we built a working Breakout AI" — it's "we ran 43 experiments, caught every false positive ourselves, built a rigorous diagnostic toolkit, and identified the correct next step." The portfolio value is in the process, not the outcome.

@@ -327,6 +327,52 @@ Neither regime produces ball-tracking. The nosticky-verification protocol is the
 
 ---
 
+### F-022: make_check_env missing EpisodicLifeEnv — INCOMPLETE det=True false positive — **CONFIRMED and FIXED (2026-07-23)**
+
+**Severity:** CRITICAL
+
+**Affected conclusion:** "PPO_55b has no functional deterministic policy — 18+ consecutive INCOMPLETE det=True checks"
+
+**Description:** The `make_check_env` function in all 14 active training scripts was missing `EpisodicLifeEnv` and `AutoResetWrapper` from the wrapper pipeline. The `MemorizationCheckCallback._run_episodes` method's custom autoreset logic requires EpisodicLifeEnv to detect intermediate life-loss events (`info[0]["lives"]`). Without it:
+- `done[0]` fires only on actual game-over (all 5 lives lost)
+- Callback's autoreset doesn't trigger correctly
+- 0 games complete within `max_check_steps` (200,000 frames)
+- Every check reports INCOMPLETE with games_played=0
+
+This produced 18+ consecutive INCOMPLETE det=True verdicts for PPO_55b (and others), which were interpreted as evidence that the entropy-boosted model couldn't produce a deterministic FIRE action. A memory file was written claiming this was the first model to "break argmax memorization." The interpretation drove 3 days of experimental decisions.
+
+**Secondary bugs in same code path:**
+- Score accumulation (`_run_episodes`) read `info[0]["episode"]["r"]` at game-over — with EpisodicLifeEnv, this is only the last life's score, not the full game. Fixed to accumulate per-frame rewards.
+- Entropy variant scripts (55a/b/c/d/e, 57b) had no `get_latest_checkpoint()` or resume logic — every restart reloaded from 9.6M source.
+
+**Fix:** Added `EpisodicLifeEnv` and `AutoResetWrapper` to `make_check_env` in all scripts. Fixed score accumulation to sum per-frame rewards. Added resume logic to entropy variants. All fixes applied 2026-07-23.
+
+**Lesson:** The env pipeline is part of the experimental apparatus. Wrapper ordering and presence matters. Every check env should be verified by inspecting at least one completed check with non-zero games_played before trusting anomalous signals.
+
+**Status:** CONFIRMED and FIXED. All training scripts updated. See EXPERIMENTS.md 4b-ERRATA for full documentation.
+
+---
+
+### F-023: Entropy variant scripts lacked resume logic — silently restarted from source checkpoint
+
+**Severity:** HIGH
+
+**Affected conclusion:** Training progress tracking for all six entropy variants (PPO_55a/b/c/d/e, 57b)
+
+**Description:** The entropy variant scripts were generated from `train_ppo_55.py` but the `get_latest_checkpoint()` function and resume-logic block were not included. On every restart (system reboot, manual stop/start, crash), the scripts reloaded from `SOURCE_CHECKPOINT_PATH/latest_checkpoint_9600000_steps.zip` instead of their own latest checkpoint. All training progress since the last save was silently discarded.
+
+With checkpoint save_freq=100,000 (model steps) and 32 envs, each save is every 3.2M timesteps. A restart at step 38.4M that reloaded from 9.6M lost 28.8M steps of training.
+
+**Fix:** Added `get_latest_checkpoint()` function and resume logic (check own CHECKPOINT_PATH first, fall back to source if none found, set fresh_start flag) to all six scripts.
+
+**Detection difficulty:** HIGH. The scripts printed the checkpoint path on startup but didn't clearly indicate whether it was their own or the source. The step counter in TensorBoard would show the correct absolute step (since `reset_num_timesteps=False` preserves the counter from the loaded checkpoint), making it appear as if training progressed normally. Only by comparing checkpoint file modification times against expected training rate could the issue be detected.
+
+**Lesson:** All training scripts should include resume logic as a standard component. A template or base class would prevent this class of bug. The `fresh_start` flag should be printed prominently on startup.
+
+**Status:** FIXED. All entropy variant scripts updated 2026-07-23.
+
+---
+
 ## Summary Table
 
 | ID | Severity | Affected Conclusion | Fixable Now? |
@@ -352,3 +398,5 @@ Neither regime produces ball-tracking. The nosticky-verification protocol is the
 | F-019 | LOW | Streak counts consistency | Yes — standardize |
 | F-020 | LOW | Pretraining progression | Maybe — check checkpoints |
 | F-021 | CONFIRMATORY | Sticky actions don't prevent memorization in deep RL | N/A — validates project findings. Independently confirms Zhang et al. (2018) |
+| **F-022** | **CRITICAL** | **PPO_55b has no functional deterministic policy** | **CONFIRMED and FIXED — env pipeline bug. All scripts updated 2026-07-23.** |
+| **F-023** | **HIGH** | **Entropy variant training progress was tracked correctly** | **FIXED — resume logic added to all six scripts 2026-07-23.** |

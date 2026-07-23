@@ -119,6 +119,25 @@ But PPO_26 had 0% zero-score across 10,000 games with sticky=on and turned out t
 
 ---
 
+### L-017: INCOMPLETE det=True verdicts (July 22-23) were interpreted as "no functional deterministic policy" — they were an env pipeline bug
+
+**What happened:** PPO_55b (ent_coef=0.02 from PPO_55 9.6M) showed 18+ consecutive INCOMPLETE det=True verdicts (0 games completed per 20-game check). This was interpreted as a breakthrough — the model couldn't even produce a FIRE action deterministically, meaning it couldn't have memorized a script. A memory file was written (`ppo55b-entropy-breaks-argmax-memorization.md`), interactive playback was built, and three additional entropy variants (55d, 57b, 55e) were launched to probe the phenomenon.
+
+**What actually happened:** `make_check_env` in all training scripts was missing `EpisodicLifeEnv` and `AutoResetWrapper`. The `MemorizationCheckCallback._run_episodes` method's autoreset logic relies on `info[0]["lives"]` to detect game-over and autoreset. Without EpisodicLifeEnv, `done[0]` fires once per full game (5 lives), but the callback's autoreset code (checking `lives == 0`) doesn't trigger the right reset path. Result: 0 games complete within `max_check_steps` (200,000 frames).
+
+After adding EpisodicLifeEnv + AutoResetWrapper to `make_check_env`, det=True completes 20/20 games every check and is always SINGLE_SCRIPT. The model was memorized from the first post-entropy check. The INCOMPLETE signal was an infrastructure bug, not a policy property.
+
+**Why this is the same pattern as L-001:** A promising anomalous metric was interpreted as evidence of a breakthrough before the test that would falsify it was run. The test would have been: "does det=True complete games in a properly configured env?" — but the env wasn't properly configured. The same asymmetric skepticism documented in L-001/L-002: when a number looks like what we want to see, we stop investigating.
+
+**Secondary failures:**
+1. Score accumulation used `info[0]["episode"]["r"]` which with EpisodicLifeEnv is the LAST life only — scores appeared to crash after the env fix, adding confusion
+2. Entropy variant scripts lacked resume logic — every restart silently reloaded from 9.6M source, discarding all progress
+3. Checkpoint save cadence (every 3.2M steps) meant 10M peak wasn't available; this gap was known but the implications for the entropy intervention (launching from a sub-peak checkpoint) weren't surfaced
+
+**Status:** All 14 active training scripts fixed (env pipeline + resume logic). Callback score accumulation fixed. The memory file has been superseded.
+
+---
+
 ## HIGH — Undermine Specific Interpretive Frameworks
 
 ### L-007: The GymBreakout-to-ALE transfer gap is systematically acknowledged and systematically deferred
