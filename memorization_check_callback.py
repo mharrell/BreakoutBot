@@ -51,12 +51,12 @@ Usage (ALE, backward-compatible):
         n_games=20,
     )
 
-Usage (GymBreakout with stochastic check):
+Usage (GymBreakout with stochastic check — GymBreakout is a custom engine, see breakout_env_vendor/):
     from memorization_check_callback import MemorizationCheckCallback
-    from gym_breakout import GymBreakout
+    from breakout_env_vendor import Breakout
 
     def make_check_env():
-        env = GymBreakout(fixed=True)
+        env = Breakout(fixed=True)
         env = GrayscaleResize(env)
         env = ClipRewardEnv(env)
         env = Monitor(env)

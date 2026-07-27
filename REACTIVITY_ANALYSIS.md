@@ -1,5 +1,13 @@
 # Reactivity Analysis — Intervention Test Results
 
+> **⚠️ CORRECTION NOTICE (2026-07-27): The core findings in this document have been FALSIFIED.**
+>
+> 1. **L-001 (dead-model calibration):** PPO_34 (confirmed dead argmax script: unique=1, std=0.0) retains 47.7% score under intervention — indistinguishable from PPO_35's reported 47%. The intervention test's retention percentage does not distinguish reactive from dead.
+> 2. **L-007 (ALE transfer gap):** PPO_35 cross-evaluated on ALE/Breakout-v5: GymBreakout 212 pts → ALE 2 pts (99.1% drop). The "robust" policy is a 2-point dead script on authentic Atari.
+> 3. **"Robust memorization" / "sighted script" framing is unsupported.** The signal interpreted as reactivity was indistinguishable from a dead-script baseline.
+>
+> This document is retained for historical reference only. Do not cite its conclusions.
+
 **Date:** 2026-07-19
 **Method:** Intervention test — teleport ball (y-axis) and paddle (x-axis) after 30% of random paddle bounces. Compare score distributions: normal vs intervention.
 **Environment:** GymBreakout(fixed=True) — deterministic Breakout, fixed ball speed, no speed-up on brick breaks (custom engine, not ALE).

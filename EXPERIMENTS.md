@@ -4,7 +4,7 @@
 
 ### Where We Are
 
-After 58+ PPO runs and a return to authentic ALE Breakout, we have confirmed that **dynamics randomization via `setRAM()` sustains policy entropy but does not prevent argmax memorization.** Y-perturb (ball Y-axis perturbation via `setRAM(101)`, ±8px, cooldown=30f, prob=10%) produces the same pattern on ALE that PPO_35 showed on the custom engine: det=False maintains healthy score diversity (8-15 unique, avg 10-14), but det=True collapses to a single memorized argmax script by 12-16M steps.
+After 91 PPO runs and a return to authentic ALE Breakout, we have confirmed that **dynamics randomization via `setRAM()` sustains policy entropy but does not prevent argmax memorization.** Y-perturb (ball Y-axis perturbation via `setRAM(101)`, ±8px, cooldown=30f, prob=10%) produces the same pattern on ALE that PPO_35 showed on the custom engine: det=False maintains healthy score diversity (8-15 unique, avg 10-14), but det=True collapses to a single memorized argmax script by 12-16M steps.
 
 The custom-engine-to-ALE transfer gap (L-007, 99.1% score drop) is now bypassed — we train and evaluate on ALE directly. But the fundamental pattern persists: dynamics randomization produces argmax-script + policy-entropy, not genuine reactive ball-tracking.
 
@@ -273,6 +273,8 @@ The original single-env comparison table (snapshot, small samples, inconsistent 
 | Best score | 406 | **415** 🏆 | 406 |
 | Funnel rate (400+) | 2/10,000 (0.02%) | **7/10,000 (0.07%)** 🏆 | 1/10,000 (0.01%, worst) |
 
+> **Statistical note on funnel rates:** With 0-7 events in 10,000 trials, all funnel rates have overlapping 95% binomial confidence intervals (Wilson method). PPO_26: 0.07% [95% CI: 0.03%–0.14%]. PPO_25: 0.02% [0.005%–0.07%]. PPO_27: 0.01% [0.002%–0.06%]. Fisher's exact test for PPO_26 (7) vs. PPO_25 (2): p ≈ 0.18 — not significant at the conventional threshold. Treat funnel rate differences of <5 events as directional indicators, not settled differences (FLAWS.md F-010).
+
 **PPO_26 wins outright on every single-env metric. PPO_27 — the all-time eval-score record holder — is the worst performer of the three on every single-env metric.** This is the most important result of the whole experiment, and it overturns the eval-score-based narrative built up over the course of this writeup.
 
 **The "needs both ingredients" hypothesis is now confirmed.** Earlier observation (informal, pre-data): PPO_26 "seldom" produced zero-score games while PPO_27 "tends to have a lot of zeros." This is now precisely quantified — PPO_27's zero-score rate (21.27%) is statistically indistinguishable from PPO_25's (20.0%), despite PPO_27 having sticky actions and PPO_25 not. **Sticky actions alone do not fix the zero-score blind spot.** Only PPO_26 — which has both sticky actions *and* PPO_25's billion steps of inherited prior training — eliminates it completely (0.0%). The deep prior training appears to be doing the real work here, with sticky actions only able to leverage it once it's present. A fresh agent trained with sticky actions from step one (PPO_27) gets neither benefit.
@@ -293,17 +295,19 @@ Following up on PPO_26's much milder version of the zero-score pattern (no liter
 
 **Result: not supported.** A direction-correctness metric (does the chosen LEFT/RIGHT action move the paddle toward the ball, given its pre-action position) was computed for the 6 captured quick-death games and for 40 unfiltered control games (`watch_controltrace_ppo26.py`):
 
-| Sample | Direction-correct rate |
-|--------|------------------------|
-| Quick-death cluster (6 games) | 61.3% |
-| Control — unfiltered (40 games) | 55.3% |
-| Control — low score (<20 pts) | 57.1% |
-| Control — mid score (20-49 pts) | 55.0% |
-| Control — high score (50+ pts) | 55.2% |
+| Sample | Direction-correct rate | Notes |
+|--------|------------------------|-------|
+| Quick-death cluster (6 games) | 61.3% | Small sample — frame-level n depends on total LEFT/RIGHT actions across 6 games |
+| Control — unfiltered (40 games) | 55.3% | |
+| Control — low score (<20 pts) | 57.1% | |
+| Control — mid score (20-49 pts) | 55.0% | |
+| Control — high score (50+ pts) | 55.2% | |
 
 Direction-correctness sits flat around 55% regardless of how well the game went, and the quick-death cluster actually scored *higher* on this metric than the control baseline — the opposite of the panic hypothesis. A velocity-aware version of the metric (predicting where the ball is heading rather than just its current position) was also tested and produced essentially the same result (54.6%), ruling out "the metric ignores velocity" as the explanation.
 
-**Conclusion:** this specific diagnostic is inconclusive and not worth refining further. Whatever causes the milder quick-death cluster in PPO_26, it isn't captured by frame-level instantaneous direction-correctness. Given that PPO_26's actual headline result (zero zero-score games, better-than-PPO_25 on every other axis) is already a strong, settled finding independent of this investigation, this thread is closed for now rather than pursued further.
+> **Statistical caveat (FLAWS.md F-018):** The 6-game quick-death sample is too small to draw reliable conclusions. Depending on the total number of frame-level LEFT/RIGHT decisions in those games (not recorded), the 95% binomial CI around 61.3% could span anywhere from ~30%–85% (if n≈100 frames) to ~58%–65% (if n≈2,000 frames). The observed 6-percentage-point gap between quick-death and control is consistent with sampling noise. This pilot data is too noisy to evaluate the diagnostic — a larger sample would be needed to settle the question.
+
+**Conclusion:** Frame-level instantaneous direction-correctness did not distinguish quick-death from normal play in this 6-game pilot. Whether this reflects a genuinely flat relationship or insufficient statistical power is unknown given the small sample. The diagnostic itself may or may not work — this investigation doesn't provide enough data to decide either way. Given that PPO_26's actual headline result (zero zero-score games, better-than-PPO_25 on every other axis) is already a strong, settled finding independent of this investigation, this thread is closed for now rather than pursued further.
 
 **Open question raised during this investigation, not yet tested:** would disabling sticky actions (`repeat_action_probability=0.0`) after training with them on for a substantial period improve precision without reintroducing the original positional-memorization problem? This is genuinely untestable from existing data — it requires running the experiment. It maps directly onto **Option B** in the Planned Next Steps below, and this investigation is a (weak, inconclusive) point in favor of trying it, since execution noise from sticky actions remains a plausible contributor to imprecision even though we couldn't isolate it cleanly here.
 
@@ -551,6 +555,8 @@ PPO_30a and PPO_31a run simultaneously (Phase 1 in parallel). PPO_30b starts as 
 
 **Tooling note:** a `MemorizationCheckCallback` (see `memorization_check_callback.py`) was added to all four training scripts after this experiment began. It runs a 20-game in-memory check every 10M steps and appends to `{RUN_NAME}_memorization_track.csv`, so the trajectory is now visible incrementally rather than only at manual check-in points. PPO_30a and PPO_31a were restarted (from checkpoint, no progress lost) to pick up the callback.
 
+> **Methodology note (FLAWS.md F-012):** The callback creates a fresh ALE per check (`make_atari_env` with `seed=None`) — "Approach B" from the Experiment 2 diagnostic. The 10k-game funnel recorders use "Approach A" — persistent env with `env.reset()` between games. Experiment 2 showed these approaches can produce different results for memorized models (PPO_28: 60-pt + 104-pt scripts in persistent env vs. pure 104-pt script in fresh-env). The callback may over- or under-estimate diversity relative to the gold-standard funnel evaluation. When comparing callback data to funnel data, note that the methodology differs.
+
 #### Phase 1 — Early Memorization, Both Runs (confirmed, then tracked)
 
 A manual check at ~11M steps (before the automated callback existed) found both PPO_30a and PPO_31a already collapsed to 1-2 repeated scores — concerning, since this happens in runs with sticky actions never having been present, unlike PPO_28/29 which collapsed *after* stickiness was removed from an already-trained policy. This raised the open question of whether non-sticky Breakout training reliably finds a fixed-script local optimum almost immediately and needs a long runway to escape it (possibly explaining why PPO_25 needed close to a billion steps to show real variance).
@@ -621,8 +627,28 @@ Automated tracking since then:
 | PPO_30b | 177,602,848 | 17 | 28.8 | 54.0 | 6.0 | **GENERALIZING** |
 | PPO_30b | 187,602,848 | 15 | 28.9 | 84.0 | 8.0 | **GENERALIZING** |
 | PPO_30b | 197,602,848 | 19 | 33.2 | 69.0 | 4.0 | **GENERALIZING** |
+| PPO_30b | 207,602,848 | 17 | 32.1 | 66.0 | 8.0 | **GENERALIZING** |
+| PPO_30b | 217,602,848 | 19 | 39.6 | 92.0 | 6.0 | **GENERALIZING** |
+| PPO_30b | 221,602,848 | 18 | 30.6 | 106.0 | 6.0 | **GENERALIZING** |
+| PPO_30b | 231,602,848 | 15 | 33.2 | 71.0 | 11.0 | **GENERALIZING** |
+| PPO_30b | 241,602,848 | 16 | 34.3 | 76.0 | 8.0 | **GENERALIZING** |
+| PPO_30b | 251,602,848 | 16 | 27.7 | 54.0 | 4.0 | **GENERALIZING** |
+| PPO_30b | 261,602,848 | 17 | 33.1 | 66.0 | 8.0 | **GENERALIZING** |
+| PPO_30b | 271,602,848 | 17 | 34.0 | 69.0 | 13.0 | **GENERALIZING** |
+| PPO_30b | 281,602,848 | 17 | 28.9 | 74.0 | 4.0 | **GENERALIZING** |
+| PPO_30b | 291,602,848 | 16 | 30.6 | 65.0 | 2.0 | **GENERALIZING** |
+| PPO_30b | 301,602,848 | 17 | 23.9 | 50.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 311,602,848 | 16 | 32.1 | 270.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 321,602,848 | 14 | 33.2 | 338.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 331,602,848 | 17 | 41.2 | 378.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 341,602,848 | 15 | 21.6 | 76.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 351,602,848 | 15 | 17.7 | 54.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 361,602,848 | 15 | 27.4 | 71.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 371,602,848 | 14 | 19.3 | 48.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 381,602,848 | 12 | 18.9 | 57.0 | 0.0 | **GENERALIZING** |
+| PPO_30b | 391,602,848 | 14 | 48.0 | 368.0 | 0.0 | **GENERALIZING** |
 
-**PPO_30b at 200M (100M sticky steps):** 🏆 **First non-sticky→sticky phase transition in this project to break memorization.** Within 10M steps of stickiness being added, the policy went from 2 unique scores to 10, and has maintained 14-19 unique scores across every check since — 100M sticky steps with zero relapses to MEMORIZED. The conservative LR restart (1e-4→1e-5) and the 100M non-sticky foundation together appear to be the winning combination. However, the single-env average score is flat at ~28-33 — the model is generalizing but not yet improving. Rollout `ep_rew_mean` (60-71) is substantially higher than the single-env memorization check average, suggesting the multi-env rollout captures better play than single-env sequential testing. 200M more sticky steps remain to convert generalization into score improvement.
+**PPO_30b Phase 2 complete at 400M (300M sticky steps, 33 checks total).** The model sustained 10-19 unique scores across every check — 300M sticky steps without a single relapse to MEMORIZED. Best scores reached 378, with a final check average of 48.0. However, post-hoc calibration confirmed these GENERALIZING verdicts were sticky-action noise (see Post-Hoc Analysis below): a dead policy + p=0.25 noise produces 8-14 unique scores, matching the observed 10-19 range. Nosticky verification confirmed collapse to ≤2 unique scores. The full 33-check track is preserved in `recordings/PPO_30b_memorization_track.csv`.
 
 **PPO_31b memorization track (sticky on, target 400M total, LR restart at 1e-4→1e-5):**
 
@@ -652,7 +678,7 @@ Automated tracking since then:
 | Both fail | Something more fundamental is going on. The "non-sticky pretraining" hypothesis may be wrong, or the phase switch LR/config needs more work. |
 | PPO_30b works, PPO_31b fails | Unexpected. Would suggest a Goldilocks effect — too much non-sticky pretraining creates habits that sticky-action training can't adapt. Worth investigating but low prior probability. |
 
-**Interim finding (at 200M):** PPO_30b has achieved the "works" threshold for generalization — 14-19 unique scores sustained for 100M sticky steps with zero relapses. But score improvement hasn't followed yet (avg flat at ~28-33). Whether this counts as "works" in the final analysis depends on whether generalization converts into higher scores in the remaining 200M steps.
+**Interim finding (at 200M, superseded by final results):** PPO_30b achieved the "works" threshold for generalization — 14-19 unique scores sustained for 100M sticky steps with zero relapses. But score improvement hadn't followed yet (avg flat at ~28-33). The remaining 200M steps saw best scores reach 378 (at 331M and 391M) but post-hoc calibration revealed these were sticky-noise artifacts — nosticky verification confirmed collapse to ≤2 unique scores. See Post-Hoc Analysis below.
 
 ---
 
@@ -707,6 +733,8 @@ Neither model approaches PPO_26. The "100M beats 300M" claim from interim rollou
 | Non-zero count | 7,677 (76.8%) | 9,030 (97.7%) |
 | Non-zero average | 36.1 | 22.7 |
 | Non-zero median | 29 | 20 |
+
+> **Caveat on conditional stats (FLAWS.md F-017):** Non-zero averages are not directly comparable when zero-score rates differ substantially. PPO_30b excludes 23.2% of its games (zeros) from the conditional average; PPO_31b excludes only 2.3%. PPO_30b's higher conditional average (36.1 vs. 22.7) is partially a selection effect — dropping a much larger fraction of its worst games mechanically inflates the conditional mean. The unconditional medians (21 vs. 20) are nearly identical, suggesting typical performance is similar despite the conditional gap.
 
 ### Outcome — A Trade-Off, Not a Winner
 

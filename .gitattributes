@@ -1,0 +1,18 @@
+* text=auto
+
+# Python — always LF (PEP 8)
+*.py text eol=lf
+
+# Documentation — LF
+*.md text eol=lf
+*.json text eol=lf
+*.xml text eol=lf
+.gitignore text eol=lf
+
+# Binary
+*.npy binary
+*.npz binary
+*.png binary
+*.mp4 binary
+*.zip binary
+*.pt binary

@@ -8,4 +8,5 @@ from .breakout_env import Breakout
 
 __all__ = (
     '__version__',
+    'Breakout',
 )

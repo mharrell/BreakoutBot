@@ -1,6 +1,6 @@
 # Logical Audit — BreakoutBot Project
 
-**Date:** 2026-07-19  
+**Date:** 2026-07-27 (updated; original 2026-07-19)  
 **Update (2026-07-19):** Phase 1 calibration results appended. L-001 and L-002 now CONFIRMED with data — PPO_34 (dead) matches or exceeds PPO_35 on all metrics. L-007 now CONFIRMED with ALE cross-evaluation data — PPO_35's GymBreakout 212-point argmax script becomes a 2-point script on ALE (99.1% score drop).
 **Scope:** Reasoning patterns, interpretive frameworks, evidence standards, and documentation consistency across the entire project.
 **Relationship to FLAWS.md:** FLAWS.md catalogs methodological flaws (confounded variables, missing baselines, measurement artifacts). This document catalogs logical flaws (reasoning errors, interpretive inversions, reification of speculative categories, asymmetric skepticism). Some issues span both documents; cross-references are provided where relevant.
@@ -9,9 +9,9 @@
 
 ## Summary
 
-The project demonstrates genuine scientific instincts — it maintains a 21-entry flaw catalog (FLAWS.md), has a written Breakthrough Verification Protocol, cross-references data against documentation, and has correctly identified and publicly corrected three major false positives. However, **it fails to apply its own critical standards to its most recent and most consequential claims.** The same pattern that produced the three documented false positives (PPO_26, PPO_30b/31b, PPO_35-mk1) is visible in the current experimental narrative and memory files: a promising number is interpreted as confirmation before the test that would falsify it is run.
+The project demonstrates genuine scientific instincts — it maintains a 23-entry flaw catalog (FLAWS.md), has a written Breakthrough Verification Protocol, cross-references data against documentation, and has correctly identified and publicly corrected three major false positives. However, **it fails to apply its own critical standards to its most recent and most consequential claims.** The same pattern that produced the three documented false positives (PPO_26, PPO_30b/31b, PPO_35-mk1) is visible in the current experimental narrative and memory files: a promising number is interpreted as confirmation before the test that would falsify it is run.
 
-This document identifies 16 specific logical issues organized by severity, plus a cross-cutting pattern analysis.
+This document identifies 17 specific logical issues organized by severity, plus a cross-cutting pattern analysis.
 
 ---
 

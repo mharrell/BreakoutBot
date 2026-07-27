@@ -153,15 +153,13 @@ This document catalogs known flaws in the BreakoutBot experimental program. Each
 
 ## MEDIUM
 
-### F-010: Funnel rate comparisons statistically unreliable
+### F-010: Funnel rate comparisons statistically unreliable — **ADDRESSED (2026-07-27)**
 
 **Affected conclusion:** Funnel rate rankings between models.
 
-**Description:** Funnel rates (400+ point games) across all models: PPO_26 = 0.07% (7/10,000), PPO_25 = 0.02% (2/10,000), PPO_27 = 0.01% (1/10,000), PPO_30b = 0.00% (0/10,000), PPO_31b = 0.00% (0/10,000). With counts this low, 95% binomial confidence intervals overlap heavily. Fisher's exact test for PPO_26 (7) vs. PPO_25 (2): p ≈ 0.18 — not significant at the conventional threshold. The document treats funnel rate as a meaningful ordinal metric without acknowledging the statistical uncertainty.
+**Status:** ADDRESSED. Binomial 95% CI footnote added to EXPERIMENTS.md Experiment 1 funnel rate table (2026-07-27). All rates have overlapping CIs. Fisher's exact test for PPO_26 (7) vs. PPO_25 (2): p ≈ 0.18 — not significant. Note added: "Treat funnel rate differences of <5 events as directional indicators, not settled differences."
 
-**Fixable with existing data?** Yes — add confidence intervals to all funnel rate reports.
-
-**Remedy:** Add binomial 95% CI footnotes to all funnel rate tables in EXPERIMENTS.md. Treat funnel rate differences of <5 events as directional indicators, not settled differences.
+**Description (original):** Funnel rates (400+ point games) across all models: PPO_26 = 0.07% (7/10,000), PPO_25 = 0.02% (2/10,000), PPO_27 = 0.01% (1/10,000), PPO_30b = 0.00% (0/10,000), PPO_31b = 0.00% (0/10,000). With counts this low, 95% binomial confidence intervals overlap heavily. Fisher's exact test for PPO_26 (7) vs. PPO_25 (2): p ≈ 0.18 — not significant at the conventional threshold. The document treats funnel rate as a meaningful ordinal metric without acknowledging the statistical uncertainty.
 
 **References:** EXPERIMENTS.md funnel rate comparisons
 
@@ -181,15 +179,13 @@ This document catalogs known flaws in the BreakoutBot experimental program. Each
 
 ---
 
-### F-012: MemorizationCheckCallback creates fresh ALE per check — different from persistent-env funnel evaluations
+### F-012: MemorizationCheckCallback creates fresh ALE per check — different from persistent-env funnel evaluations — **ADDRESSED (2026-07-27)**
 
 **Affected conclusion:** Comparability of memorization-check verdicts with 10k-game funnel results.
 
-**Description:** `memorization_check_callback.py:84-86` creates a new ALE environment (`make_atari_env` with `seed=None`) on every check. This is "Approach B" from the Experiment 2 diagnostic — fresh env per check. The 10k-game funnel recorders use "Approach A" — persistent env with `env.reset()` between games. Experiment 2 showed these approaches produce different results for memorized models. The callback may systematically under- or over-estimate generalization relative to the gold-standard evaluation.
+**Status:** ADDRESSED. Methodology note added to EXPERIMENTS.md Experiment 3 section (2026-07-27) documenting the fresh-env vs. persistent-env difference and warning that the callback may over- or under-estimate diversity relative to gold-standard funnel evaluations.
 
-**Fixable with existing data?** Yes. Run a comparison: same model through both the callback's fresh-env approach and a persistent-env approach, compare unique-score counts.
-
-**Remedy:** Document the methodology difference in RL_REFERENCE.md. For future experiments, consider adding a persistent-env variant of the callback or noting the discrepancy when comparing callback data to funnel data.
+**Description (original):** `memorization_check_callback.py:84-86` creates a new ALE environment (`make_atari_env` with `seed=None`) on every check. This is "Approach B" from the Experiment 2 diagnostic — fresh env per check. The 10k-game funnel recorders use "Approach A" — persistent env with `env.reset()` between games. Experiment 2 showed these approaches produce different results for memorized models. The callback may systematically under- or over-estimate generalization relative to the gold-standard evaluation.
 
 **References:** memorization_check_callback.py:84-86, EXPERIMENTS.md Experiment 2 seeding investigation
 
@@ -209,15 +205,15 @@ This document catalogs known flaws in the BreakoutBot experimental program. Each
 
 ---
 
-### F-014: deterministic=True in all evaluations — no stochastic-policy baseline
+### F-014: deterministic=True in all evaluations — no stochastic-policy baseline — **PARTIALLY ADDRESSED (2026-07-27)**
 
 **Affected conclusion:** That the observed score variance reflects genuine policy diversity.
 
-**Description:** All funnel recorders and eval callbacks use `model.predict(obs, deterministic=True)`. This selects the argmax action at every step. For non-sticky models, this means zero randomness — same ALE state → same action → same outcome (variation comes only from ALE internal state drift between episodes). For sticky models, randomness comes from the environment (25% action-repeat probability), not from the policy. No evaluation has been run with `deterministic=False` to measure how much variance the policy's own action distribution would introduce. If the policy's action probabilities are nearly one-hot (entropy near zero), deterministic=True is representative. But we don't know that.
+**Status:** PARTIALLY ADDRESSED. The Experiment 3 Post-Hoc Variance Decomposition section in EXPERIMENTS.md now includes a det=True vs. det=False comparison for PPO_30b (July 2026), showing dramatically different results: det=True sticky=off → 2 unique scores (memorized collapse); det=False sticky=off → 43 unique scores (residual policy entropy). This confirms the flaw's concern was valid — deterministic sampling suppresses real policy diversity. However, the main evaluation pipeline (funnel recorder, eval callback) still uses `deterministic=True` exclusively. No det=False baseline exists in the standard evaluation protocol.
 
-**Fixable with existing data?** Yes. Run a deterministic vs. stochastic comparison on one model (see `eval_variance_test.py`).
+**Remaining work:** Add a `deterministic=False` option to the funnel recorder script and run a matched comparison on at least one model to quantify the gap in the standard evaluation framework.
 
-**Remedy:** Run the comparison. If deterministic and stochastic produce identical distributions, the current protocol is validated. If they differ, a new evaluation protocol is needed.
+**Description (original):** All funnel recorders and eval callbacks use `model.predict(obs, deterministic=True)`. This selects the argmax action at every step. For non-sticky models, this means zero randomness — same ALE state → same action → same outcome (variation comes only from ALE internal state drift between episodes). For sticky models, randomness comes from the environment (25% action-repeat probability), not from the policy. No evaluation has been run with `deterministic=False` to measure how much variance the policy's own action distribution would introduce. If the policy's action probabilities are nearly one-hot (entropy near zero), deterministic=True is representative. But we don't know that.
 
 **References:** All funnel recorder scripts, memorization_check_callback.py:95
 
@@ -237,15 +233,15 @@ This document catalogs known flaws in the BreakoutBot experimental program. Each
 
 ---
 
-### F-016: Phase 1 and Phase 2 data missing from EXPERIMENTS.md
+### F-016: Phase 1 and Phase 2 data missing from EXPERIMENTS.md — **RESOLVED (2026-07-27)**
 
 **Affected conclusion:** Completeness of the experimental record.
 
-**Description:** (a) PPO_31a Phase 1 memorization track has 33 rows in the CSV (10M-294M) but the EXPERIMENTS.md table stops at 200M (20 rows). The final 100M steps are missing from the document. (b) PPO_31b Phase 2 memorization track has 10 rows (300M-390M) but zero appear in EXPERIMENTS.md. The CSV data exists on disk but was never transcribed.
+**Status:** RESOLVED. Verified 2026-07-27: PPO_31a Phase 1 data in EXPERIMENTS.md now covers all 30 unique checkpoints from 10M to 294M (CSV has 33 rows with 3 duplicates at 160M). PPO_31b Phase 2 data now covers all 10 checkpoints from 300M to 390M. Both tables match CSV ground truth. The data was transcribed at some point after this flaw was filed.
 
-**Fixable with existing data?** Yes — transcribe from CSV.
+**Note on verification:** The convention established in the remedy has been applied retroactively — cross-checking EXPERIMENTS.md tables against raw CSV files. Add this to the session bootstrap checklist.
 
-**Remedy:** Add the missing rows to EXPERIMENTS.md. Add a convention: after every experiment completes, cross-check EXPERIMENTS.md tables against raw CSV files before declaring the writeup complete.
+**Description (original):** (a) PPO_31a Phase 1 memorization track has 33 rows in the CSV (10M-294M) but the EXPERIMENTS.md table stops at 200M (20 rows). The final 100M steps are missing from the document. (b) PPO_31b Phase 2 memorization track has 10 rows (300M-390M) but zero appear in EXPERIMENTS.md. The CSV data exists on disk but was never transcribed.
 
 **References:** `recordings/PPO_31a_memorization_track.csv`, `recordings/PPO_31b_memorization_track.csv`
 
@@ -253,45 +249,39 @@ This document catalogs known flaws in the BreakoutBot experimental program. Each
 
 ## LOW
 
-### F-017: "Non-zero average" mechanically inflated for high-zero-score models
+### F-017: "Non-zero average" mechanically inflated for high-zero-score models — **ADDRESSED (2026-07-27)**
 
 **Affected conclusion:** Conditional stats comparison (PPO_30b non-zero avg 36.1 vs. PPO_31b non-zero avg 22.7).
 
-**Description:** PPO_30b excludes 23.2% of its games (zeros) from the conditional average; PPO_31b excludes only 2.3%. PPO_30b's higher conditional average is partially a selection effect — it drops a much larger fraction of its worst games. The unconditional medians (21 vs. 20) show near-identical typical performance. The document presents the conditional stats without noting this mechanical inflation.
+**Status:** ADDRESSED. Caveat added to EXPERIMENTS.md Experiment 3 conditional stats table (2026-07-27) noting that PPO_30b excludes 23.2% of games vs. PPO_31b's 2.3%, mechanically inflating the conditional mean. Unconditional medians (21 vs. 20) are nearly identical.
 
-**Fixable with existing data?** Yes — add a note.
-
-**Remedy:** Add a caveat to the conditional stats table: "Non-zero averages are not directly comparable when zero-score rates differ substantially. The model that excludes more games gets a larger mechanical boost."
+**Description (original):** PPO_30b excludes 23.2% of its games (zeros) from the conditional average; PPO_31b excludes only 2.3%. PPO_30b's higher conditional average is partially a selection effect — it drops a much larger fraction of its worst games. The unconditional medians (21 vs. 20) show near-identical typical performance. The document presents the conditional stats without noting this mechanical inflation.
 
 **References:** EXPERIMENTS.md Experiment 3 conditional stats table
 
 ---
 
-### F-018: Direction-correctness conclusion from 6-game sample
+### F-018: Direction-correctness conclusion from 6-game sample — **ADDRESSED (2026-07-27)**
 
 **Affected conclusion:** That "frame-level instantaneous direction-correctness" is "not a reliable diagnostic."
 
-**Description:** The quick-death cluster analysis used 6 games (61.3% direction-correct) vs. 40 control games (55.3%). A binomial 95% CI around 61.3% with n=6 spans roughly 22%-96% — the observed difference from 55.3% is consistent with sampling noise. The investigation's negative result could reflect insufficient data rather than a genuinely flat relationship. The document calls it "inconclusive" but also concludes the diagnostic "isn't worth refining" — a recommendation that assumes the null result is trustworthy.
+**Status:** ADDRESSED. Statistical caveat added to EXPERIMENTS.md (2026-07-27) noting that the 6-game quick-death sample is too small for reliable inference — the 95% binomial CI around 61.3% could span anywhere from ~30%–85% depending on the (unrecorded) frame-level n. The conclusion was reworded from "this diagnostic doesn't work" to "this pilot data is too noisy to evaluate the diagnostic — a larger sample would be needed to settle the question."
 
-**Fixable with existing data?** Yes — re-analyze with confidence intervals and reword.
-
-**Remedy:** Add CIs to the comparison table. Change the conclusion from "this diagnostic doesn't work" to "this pilot data is too noisy to evaluate the diagnostic — a larger sample would be needed to settle the question."
+**Description (original):** The quick-death cluster analysis used 6 games (61.3% direction-correct) vs. 40 control games (55.3%). A binomial 95% CI around 61.3% with n=6 spans roughly 22%-96% — the observed difference from 55.3% is consistent with sampling noise. The investigation's negative result could reflect insufficient data rather than a genuinely flat relationship. The document calls it "inconclusive" but also concludes the diagnostic "isn't worth refining" — a recommendation that assumes the null result is trustworthy.
 
 **References:** EXPERIMENTS.md Experiment 1 direction-correctness investigation
 
 ---
 
-### F-019: Claims about "GENERALIZING streak" inconsistently reported
+### F-019: Claims about "GENERALIZING streak" inconsistently reported — **ADDRESSED (2026-07-27)**
 
 **Affected conclusion:** Documentation accuracy.
 
-**Description:** `.opencode/instructions.md` says PPO_30b has "33/33 GENERALIZING" and PPO_31b has "12/12 GENERALIZING." The CSV data confirms 33 checks for PPO_30b (all GENERALIZING) and 10 checks for PPO_31b (all GENERALIZING — the "12/12" appears to include 2 extras or a counting error). EXPERIMENTS.md only shows 11 of PPO_30b's 33 checks and 0 of PPO_31b's 10. The numbers aren't reconciled across documents.
+**Status:** ADDRESSED. PPO_30b memorization track table in EXPERIMENTS.md now includes all 33 checkpoints (was 11). PPO_31b table includes all 10 checkpoints (was 0). The historical "12/12" for PPO_31b was a counting error — CSV confirms exactly 10 checks. The updated narrative for PPO_30b Phase 2 references the CSV as the authoritative source. All counts now standardized on CSV ground truth.
 
-**Fixable with existing data?** Yes — standardize on CSV counts.
+**Description (original):** Historical records (formerly in `.opencode/instructions.md`, now deleted) reported PPO_30b as "33/33 GENERALIZING" and PPO_31b as "12/12 GENERALIZING." The CSV data confirms 33 checks for PPO_30b (all GENERALIZING) and 10 checks for PPO_31b (all GENERALIZING — the "12/12" appears to include 2 extras or a counting error). EXPERIMENTS.md only shows 11 of PPO_30b's 33 checks and 0 of PPO_31b's 10. The numbers aren't reconciled across documents.
 
-**Remedy:** After transcribing missing data (F-016), update all documents to use the same counts sourced from the CSVs.
-
-**References:** `.opencode/instructions.md` line 20, `recordings/PPO_30b_memorization_track.csv` (33 rows), `recordings/PPO_31b_memorization_track.csv` (10 rows)
+**References:** `recordings/PPO_30b_memorization_track.csv` (33 rows), `recordings/PPO_31b_memorization_track.csv` (10 rows). Note: `.opencode/instructions.md` no longer exists.
 
 ---
 
@@ -386,16 +376,16 @@ With checkpoint save_freq=100,000 (model steps) and 32 envs, each save is every 
 | F-007 | HIGH | Sticky p=0.25 is the right value | Partially — sweep existing models |
 | F-008 | HIGH | Both ingredients necessary | No — requires long training run |
 | F-009 | HIGH | Both ingredients hypothesis | No — requires matched-step controls |
-| F-010 | MEDIUM | Funnel rate rankings | Yes — add CIs |
+| F-010 | MEDIUM | Funnel rate rankings | **ADDRESSED 2026-07-27** — CIs and caveat added to EXPERIMENTS.md |
 | F-011 | MEDIUM | Three-way PPO_25/26/27 comparison | No — PPO_27 training ended |
-| F-012 | MEDIUM | Callback vs funnel comparability | Yes — methodology comparison |
+| F-012 | MEDIUM | Callback vs funnel comparability | **ADDRESSED 2026-07-27** — methodology note added to EXPERIMENTS.md |
 | F-013 | MEDIUM | Eval-vs-rollout gap attribution | Partially — document artifact |
-| F-014 | MEDIUM | Observed variance = policy diversity | Yes — det vs stoch comparison |
+| F-014 | MEDIUM | Observed variance = policy diversity | **PARTIALLY ADDRESSED 2026-07-27** — det vs stoch data exists for PPO_30b; main eval pipeline still hardcodes det=True |
 | F-015 | MEDIUM | Cross-experiment comparisons | No — requires rerun |
-| F-016 | MEDIUM | Documentation completeness | Yes — transcribe from CSV |
-| F-017 | LOW | Conditional stats comparison | Yes — add caveat |
-| F-018 | LOW | Direction-correctness diagnostic | Yes — add CIs, reword |
-| F-019 | LOW | Streak counts consistency | Yes — standardize |
+| F-016 | MEDIUM | Documentation completeness | **RESOLVED 2026-07-27** — data was already transcribed; verified against CSV |
+| F-017 | LOW | Conditional stats comparison | **ADDRESSED 2026-07-27** — caveat added to EXPERIMENTS.md |
+| F-018 | LOW | Direction-correctness diagnostic | **ADDRESSED 2026-07-27** — CIs and reworded conclusion added to EXPERIMENTS.md |
+| F-019 | LOW | Streak counts consistency | **ADDRESSED 2026-07-27** — PPO_30b 33/33 entries added; PPO_31b count corrected to 10 |
 | F-020 | LOW | Pretraining progression | Maybe — check checkpoints |
 | F-021 | CONFIRMATORY | Sticky actions don't prevent memorization in deep RL | N/A — validates project findings. Independently confirms Zhang et al. (2018) |
 | **F-022** | **CRITICAL** | **PPO_55b has no functional deterministic policy** | **CONFIRMED and FIXED — env pipeline bug. All scripts updated 2026-07-23.** |

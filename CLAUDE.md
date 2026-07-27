@@ -13,7 +13,7 @@ If you're a new Claude session, start here:
 1. **Read `CURRENT_STATE.md`** — the definitive status document. Claim status board, model roster, what we've learned, what's next. 5-minute read. Everything else references this.
 
 2. **The one-paragraph brief:**
-   > No model in this project has ever genuinely generalized. Every model that appeared promising was found to be a memorized script or noise-masked dead policy. The custom GymBreakout engine does not transfer to authentic ALE (PPO_35: 212 pts → 2 pts, 99.1% drop). The intervention test does not distinguish reactive from dead (dead baseline: 49.6% retention). det=False score diversity exists in dead scripts (19 unique from a confirmed-dead argmax model). The return to authentic ALE Breakout using `setRAM()` for dynamics randomization is the correct next step. Before making any claim about any model, run a dead-model calibration and nosticky verification.
+   > After 91 experiments, no model in this project has ever genuinely generalized. NatureCNN CAN track the ball perfectly (1.9px MAE, proven) but PPO never learns to use those features — even when they're frozen in (PPO_85: 0pt collapse). The perception-policy gap is the central problem: the Atari score gradient rewards brick-breaking, and blind paddle-sweeping scripts are a viable local optimum. Dynamics randomization (setRAM teleports at ±8px through ±45px) changes which script gets memorized but never breaks SINGLE_SCRIPT. The custom GymBreakout engine does not transfer to ALE. Experiment 8 (active) tests whether making ball-tracking more rewarding than brick-breaking can shift the optimization landscape. Before making any claim about any model, run a dead-model calibration and nosticky verification.
 
 3. **What NOT to trust:**
    - MemorizationCheckCallback "GENERALIZING" verdicts for sticky models — confirmed invalid (F-001)
@@ -37,13 +37,14 @@ If you're a new Claude session, start here:
 
 | File | Purpose |
 |------|---------|
-| `CURRENT_STATE.md` | **READ THIS FIRST.** Definitive status — claim board, model roster, lessons learned, next steps. Updated 2026-07-19. |
-| `LOGICAL_AUDIT.md` | 16-entry logical flaw catalog. L-001/002/007 confirmed with data. Complements FLAWS.md. |
-| `FLAWS.md` | 21-entry methodological flaw catalog with severity ratings. Read before interpreting any result. |
-| `EXPERIMENTS.md` | Full experiment writeup — all experiments, results, conclusions. Claims corrected 2026-07-19. |
+| `CURRENT_STATE.md` | **READ THIS FIRST.** Definitive status — claim board, model roster, lessons learned, next steps. Updated 2026-07-27. |
+| `LOGICAL_AUDIT.md` | 17-entry logical flaw catalog. L-001/002/007 confirmed with data. Complements FLAWS.md. |
+| `FLAWS.md` | 23-entry methodological flaw catalog with severity ratings. Read before interpreting any result. |
+| `EXPERIMENTS.md` | Full experiment writeup — all experiments, results, conclusions. Updated 2026-07-27. |
 | `RL_REFERENCE.md` | PPO parameter guide, metric diagnostics, 31+ lessons, decision framework |
-| `.opencode/instructions.md` | Session bootstrap, agent guardrails, known misinterpretation traps |
-| `archive/` | Historical training and evaluation scripts from Experiments 1-5. Reference only. See `archive/README.md`. |
+| `COMBINATION_MATRIX.md` | Anti-memorization method results matrix (OF, YP, RS, HE, Dropout combos). |
+| `REVENGE_BRUNCH.md` | RBO project — superhuman Breakout via deep pretraining + sticky. |
+| `REACTIVITY_ANALYSIS.md` | Intervention test results (historical — conclusions falsified, see correction notice). |
 
 ## Critical Rules (Never Do These)
 
@@ -80,9 +81,9 @@ Before interpreting any result, consult `FLAWS.md`. The most consequential activ
 ## Session Bootstrap (run these in order)
 
 0. **Read `CURRENT_STATE.md`** — claim status board, model roster, what to trust/distrust. 5-minute orientation.
-1. Read `recordings/PPO_*_memorization_track.csv` — ground-truth live state. **WARNING: meaningless for GymBreakout-trained models (PPO_33/34/35+) — the callback tests ALE, not GymBreakout. Use eval callback data (`logs/*/evaluations.npz`) and `eval_reactivity.py` output for these.**
+1. Read `recordings/PPO_*_memorization_track.csv` — ground-truth live state. **WARNING: meaningless for GymBreakout-trained models (PPO_33/34/35+) — the callback tests ALE, not GymBreakout. Use eval callback data (`logs/*/evaluations.npz`) for these. All current experiments (PPO_44+) train on ALE directly.**
 2. Check `models/*/checkpoint/` — newest checkpoint filenames give actual step counts
-3. Compare memorization track + checkpoint data against `CURRENT_STATE.md` and `.opencode/instructions.md` "Live Run Status" — flag discrepancies
+3. Compare memorization track + checkpoint data against `CURRENT_STATE.md` — flag discrepancies
 4. Read `FLAWS.md` to refresh awareness of active limitations
 5. Read `LOGICAL_AUDIT.md` to refresh awareness of reasoning pitfalls
 6. If console logs exist: `Get-Content -Encoding Unicode recordings/PPO_*_console.log -Tail 30`

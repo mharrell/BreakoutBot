@@ -2,6 +2,8 @@
 
 Standardized procedures for running and interpreting model evaluations. Every evaluation in this project should follow this protocol. Deviations must be documented with rationale.
 
+**Last updated:** 2026-07-27. Incorporating lessons from F-022 (env pipeline bug), L-001 (dead-model calibration), and F-014 (deterministic vs. stochastic comparison gap).
+
 ---
 
 ## Part 1: Evaluation Types
@@ -44,6 +46,7 @@ Standardized procedures for running and interpreting model evaluations. Every ev
 - **Config:** 500 games deterministic + 500 games stochastic, same model, matched sticky setting
 - **Script:** `eval_variance_test.py`
 - **Use for:** Validating that `deterministic=True` is representative
+- **⚠️ KNOWN GAP (FLAWS.md F-014):** All gold-standard 10k evaluations use `deterministic=True` exclusively. PPO_30b showed 2 unique scores (det=True, sticky=off) vs. 43 unique scores (det=False, sticky=off) — the argmax can collapse while the policy retains useful entropy. No det=False baseline exists in the standard evaluation protocol. The funnel recorder should be extended to support a `deterministic=False` option for comparison.
 
 ### 1F. Sticky Probability Sweep
 
@@ -63,6 +66,8 @@ Before starting any evaluation:
 - [ ] **Script uses correct evaluation type.** Gold standard = 1B (10k games), verification = 1C (500 games), sweep = 1F
 - [ ] **Output paths don't collide.** If resuming, the script opens in append mode. If starting fresh, the log path doesn't already have data.
 - [ ] **For sticky-model memorization checks:** Note that the GENERALIZING verdict is uncalibrated (FLAWS.md F-001). If `recordings/memorization_calibration.csv` exists, check the noise baseline before interpreting.
+- [ ] **Env pipeline verified (FLAWS.md F-022).** If using `make_check_env` or any custom evaluation environment: confirm the wrapper pipeline includes `EpisodicLifeEnv` and `AutoResetWrapper`. Without them, `done[0]` fires only on full game-over (5 lives lost), the MemorizationCheckCallback's autoreset logic does not trigger, and 0 games complete — producing false INCOMPLETE verdicts. Verify by inspecting at least one completed check with non-zero games_played before trusting anomalous signals. The env pipeline is part of the experimental apparatus — wrapper ordering and presence matters.
+- [ ] **Dead-model calibration available (LOGICAL_AUDIT.md L-001).** Before interpreting any metric as evidence of reactivity (intervention retention, shape classification, unique-score count), confirm that a known-dead model has been run through the same test. If a dead script produces the same signal as the model being tested, the signal is not evidence of reactivity. The calibration logic from F-001 applies universally.
 
 ---
 
@@ -91,8 +96,9 @@ Before starting any evaluation:
 - [ ] **Compute bootstrap 95% CIs** on: mean, median, zero-score rate, funnel rate
 - [ ] **For funnel rates:** Report binomial (Clopper-Pearson) 95% CI. If count < 50, add caveat: "funnel rate comparisons are directional, not statistically significant at N=10,000"
 - [ ] **Compute score distribution:** percentiles at P5, P10, P25, P50, P75, P90, P95, P99
-- [ ] **If zero-score rates differ substantially between comparison models:** Caveat the "non-zero average" metric — it's mechanically inflated for the model with more zeros
+- [ ] **If zero-score rates differ substantially between comparison models:** Caveat the "non-zero average" metric — it's mechanically inflated for the model with more zeros (FLAWS.md F-017)
 - [ ] **Sticky-off verification completed** for this model (if sticky-trained)
+- [ ] **Dead-model calibration checked (LOGICAL_AUDIT.md L-001):** Before claiming any model is reactive (intervention retention, high det=False diversity, shape classification), verify that a known-dead model produces a different signal. If PPO_34 (dead argmax script) produces the same 19 unique det=False scores as the model being tested, the metric is not evidence of reactivity.
 - [ ] **Results transcribed into EXPERIMENTS.md** with all caveats
 
 ### Required for Sticky-Off Verification:
@@ -206,8 +212,10 @@ LOG_PATH = os.path.join(OUTPUT_DIR, f"{RUN_NAME}_funnel_log.csv")
 
 ## References
 
-- `FLAWS.md` — Full audit of known methodological limitations
-- `EXPERIMENTS.md` — Experiment writeups and results
-- `RL_REFERENCE.md` — Lessons learned, especially #23 (eval vs. single-env), #28-31 (memorization collapse), #32-35 (new methodology lessons)
+- `FLAWS.md` — Full audit of known methodological limitations (23 entries as of 2026-07-27)
+- `LOGICAL_AUDIT.md` — 17-entry logical flaw catalog. L-001 (uncalibrated intervention test), L-007 (GymBreakout-ALE transfer gap), L-014 (uncalibrated shape classifier)
+- `EXPERIMENTS.md` — Experiment writeups and results (through Experiment 5)
+- `RL_REFERENCE.md` — 50 lessons learned. See especially #23 (eval vs. single-env), #28-31 (memorization collapse), #41 (perception-policy gap), #43 (entropy falsified), #47-48 (F-022/F-023 infrastructure lessons)
+- `COMBINATION_MATRIX.md` — Anti-memorization method results matrix (OF, YP, RS, HE, Dropout combos)
 - `calibrate_memorization_check.py` — Sticky-action noise baseline calibration
 - `statistical_comparison.py` — Bootstrap CI and significance test utility

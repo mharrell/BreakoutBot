@@ -1,14 +1,32 @@
 # Current State — BreakoutBot
 
-**Last updated: 2026-07-23 (Y-perturb and entropy experiments complete)**
+**Last updated: 2026-07-27 (Dose-response curve complete + Experiment 8 reward structure)**
 
 ---
 
 ## TL;DR
 
-After 58+ PPO runs, **no model in this project has ever genuinely generalized** to reactive ball-tracking in Breakout. The return to authentic ALE Breakout using `setRAM()` for dynamics randomization has produced the same pattern seen on the custom engine: det=False maintains score diversity while det=True collapses to a single memorized argmax script. Y-perturb (ball Y-axis perturbation via `setRAM(101)`, ±8px, cooldown=30f, prob=10%) sustains stochastic diversity but does not prevent the argmax from memorizing. Entropy coefficient increases from 0.006 up to 0.10 (16.7×) do not prevent argmax collapse — they only affect the quality of the resulting script. The next direction is higher perturbation probability (prob ≥ 0.25) to test whether more frequent perturbation makes memorized scripts non-viable.
+**Perception POC (July 26): NatureCNN CAN track the ball to 1.9px MAE (0.6px median).** The architecture has the perceptual capability. PPO_85 proved that even with those perfect ball-position features frozen in, PPO converges to a 0pt blind script. The SINGLE_SCRIPT problem is in the optimization, not the perception.
 
-A critical infrastructure bug was discovered and fixed during this experimental cycle: `make_check_env` was missing `EpisodicLifeEnv` and `AutoResetWrapper`, causing the MemorizationCheckCallback to produce 18+ consecutive INCOMPLETE det=True verdicts for PPO_55b — all of which were false negatives. With the fix, det=True always completes and the true argmax behavior is visible from the first check. All training scripts have been updated.
+**Dose-response curve (July 27): Teleport magnitude changes which script gets memorized, not whether.** ±30px produces a 21pt script (best in the project for dynamics). ±35px is marginal (0-5pt). ±40px+ is dead (0pt). But every single setting produces SINGLE_SCRIPT on clean ALE. Teleports change the script quality, not the memorization outcome.
+
+**Experiment 8 (LAUNCHING): Reward the behavior directly.** If the Atari score signal is the attractor pulling PPO toward blind scripts, then we need to make ball-tracking *more rewarding than the Atari score*. Four variants: ball-hit reward at 1.0 and 2.0, descending-only proximity, and combined (hit + proximity + survival penalty). All train on clean ALE — no teleports, no noise. The goal is to shift the optimization landscape so reactive policies occupy a higher local optimum than blind scripts.
+
+After 91 experiments, no method has broken SINGLE_SCRIPT.
+
+---
+
+## Terminology
+
+| Term | Definition |
+|------|-----------|
+| **SINGLE_SCRIPT** | ≤2 unique scores on det=True across n_games. The argmax produces the same score every game. |
+| **MULTIPLE_SCRIPTS** | 3+ unique scores on det=True. Not yet observed on clean ALE in 91 experiments. |
+| **Memorized** | SINGLE_SCRIPT on clean ALE det=True. Does NOT imply 0pt — a 21pt script is still memorized. |
+| **Dead** | 0pt exactly on clean ALE det=True. A subset of memorized. |
+| **Blind script** | A memorized policy with no evidence of ball-tracking. Synonymous with "memorized script." |
+| **Stoch** | det=False (stochastic sampling). Produces score diversity even in memorized policies. |
+| **Collapse** | Transition from MULTIPLE_SCRIPTS to SINGLE_SCRIPT, or from nonzero to 0pt. |
 
 ---
 
@@ -29,6 +47,11 @@ A critical infrastructure bug was discovered and fixed during this experimental 
 | **Entropy coefficient does not prevent argmax collapse** | 55a (0.01), 55b (0.02), 55c (0.04), 55d (0.025), 55e (0.10) — all SINGLE_SCRIPT on det=True |
 | **INCOMPLETE det=True verdicts (July 22-23) were false positives from env mismatch** | make_check_env lacked EpisodicLifeEnv; callback never detected game-over. Fixed in all 14 scripts. |
 | **Run-to-run variance in memorization trajectory is real** | PPO_55/57/58: identical configs, different seed → different det=False peak timing and magnitude |
+| **NatureCNN CAN track the ball — perception is not the bottleneck** | Perception POC: 4-frame NatureCNN predicts ball position to 1.9px MAE (0.6px median, 1.7px X, 0.5px Y). 71% improvement over single-frame (6.6px). The conv features encode ball position with near-perfect precision. PPO never learns to use them. |
+| **Every method added to OpticalFlow reduces performance** | OF solo (44pt) > every OF+1 combo (20-28pt) > every OF+2 combo (9-22pt). OF+YP+RS+HE with ent=0.02 flatlined at 0pt. The pattern is monotonic. |
+| **Dynamics randomization via setRAM() does not transfer to ALE** | PPO_78 (mild teleports), PPO_79 (σ=0.5 noise), PPO_80 (σ=1.5 noise) — all SINGLE_SCRIPT on clean ALE. The mechanism that produced intervention-robust policies on the custom engine does not work on authentic Atari. |
+| **Dose-response curve: teleport magnitude changes script quality, not memorization outcome** | PPO_78 (±8px)=0pt, PPO_90 (±30px)=13pt peak, PPO_81 (±30px)=21pt peak at 50M, PPO_91 (±35px)=0-5pt marginal, PPO_89 (±40px)=0pt dead, PPO_87/88 (±45px)=0pt dead. Every setting SINGLE_SCRIPT. ±30px is the sweet spot but still memorized. |
+| **Frozen pretrained ball-tracker features don't prevent collapse** | PPO_85 (conv+linear frozen from 1.9px MAE BallTrackerCNN4Frame): collapsed to 0pt SINGLE_SCRIPT by 6M (first zero at 6M, confirmed through 25M). PPO_86 (conv frozen, linear trainable): killed at 1M (0pt). The optimizer actively avoids using available ball-position features. |
 
 ### TENTATIVE — Plausible but not confirmed
 
@@ -61,9 +84,9 @@ Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_
 
 | Model | Seed | Target | Final Step | det=True | det=False (final) | Notes |
 |-------|------|--------|------------|----------|-------------------|-------|
-| PPO_55 | default | 50M | 48M | SINGLE_SCRIPT ~15 pts | 10 unique, avg 9.5, best 17 | First Y-only. det=False peak at 10M: 9 unique, avg 11.6, best 16 |
-| PPO_57 | 57 | 50M | 48M | SINGLE_SCRIPT | 12 unique, avg ~14, best ~24 | Stronger det=False than PPO_55. Confirmed 10M peak. |
-| PPO_58 | 58 | 50M | 48M | SINGLE_SCRIPT ~11-13 pts | 12 unique, avg ~11, best ~24 | Third replicate. Classic pattern. |
+| PPO_55 | default | 50M | 50M | SINGLE_SCRIPT ~15 pts | 10 unique, avg 9.5, best 17 | First Y-only. det=False peak at 10M: 9 unique, avg 11.6, best 16 |
+| PPO_57 | 57 | 50M | 50M | SINGLE_SCRIPT | 12 unique, avg ~14, best ~24 | Stronger det=False than PPO_55. Confirmed 10M peak. |
+| PPO_58 | 58 | 50M | 50M | SINGLE_SCRIPT ~11-13 pts | 12 unique, avg ~11, best ~24 | Third replicate. Classic pattern. |
 
 **Finding:** Identical configs with different seeds produce meaningfully different score trajectories. The 10M det=False diversity peak is independently confirmed. All three converge to argmax scripts by 12-16M.
 
@@ -130,7 +153,25 @@ Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_
 
 ## What We've Learned
 
-### This experimental cycle (July 20-23, 2026)
+### Perception POC (July 26, 2026)
+
+1. **NatureCNN can locate the ball from pixels with near-perfect precision.** 4-frame stacked NatureCNN trained via supervised regression achieves 1.9px MAE (0.6px median). The conv features encode ball position — the architecture can "see" the ball. PPO never learns to attend to these features.
+
+2. **Temporal context is critical for horizontal localization.** Single-frame: 6.2px X error. 4-frame: 1.7px X error. Motion information is how the CNN disambiguates the 2-3px ball from visual clutter. The 4-frame stack the RL agent uses is sufficient.
+
+3. **The SINGLE_SCRIPT problem is an RL optimization bottleneck, not a perception bottleneck.** This is the most important finding of the project to date. After 91 experiments, we now know the CNN can represent ball position perfectly but PPO never discovers this signal. The reward gradient from "paddle swept past ball → scored a point" is too sparse and delayed to compete with the local optimum of "paddle sweeps back and forth → occasionally hits ball → gets some reward."
+
+### Combination Matrix (July 25-26, 2026)
+
+4. **OpticalFlow accelerates memorization, doesn't prevent it.** OF solo (PPO_66) reached 44pt stoch best — the fastest convergence in the project. But it's still SINGLE_SCRIPT. OF speeds up the same trajectory, doesn't change the destination.
+
+5. **Adding methods to OF is strictly subtractive.** OF solo > OF+1 > OF+2 > OF+4. Each additional method adds noise that dilutes the gradient without preventing memorization.
+
+6. **Dynamics randomization via setRAM() failed at three settings.** Mild teleports (PPO_78), moderate per-frame noise (PPO_79), strong per-frame noise (PPO_80) — all SINGLE_SCRIPT on clean ALE. Per-frame noise teaches noise-ignoring, not ball-tracking.
+
+7. **Survival mode is the universal failure mode for multi-method combos.** When scripts are prevented but reactivity isn't taught, the policy defaults to "keep paddle moving, don't die" — long episodes (3000-9000f), low scores (15-30pt).
+
+### This experimental cycle (July 20-23, 2026) — Y-Perturb + Entropy
 
 1. **Y-perturb via setRAM works technically.** Writing to RAM address 101 (ball Y) is reliable on ALE v0.11. The wrapper with cooldown mechanism is stable across billions of training steps.
 
@@ -158,35 +199,55 @@ Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_
 
 ## What's Next
 
-### Immediate: Higher Perturbation Probability
+### Running Now (1 GPU, July 27)
 
-The central question after this cycle: at what perturbation probability do scripts become non-viable?
+| Slot | Run | Recipe | Progress |
+|------|-----|--------|----------|
+| 1 | RBO_02 | OF + Dropout (Revenge Brunch) | ~109M / 1B |
+| 2-5 | PPO_92-95 | Experiment 8: Ball-tracking reward | QUEUED |
 
-**Design (presented for approval):**
-- Two fresh runs: **prob=0.25** (2.5× current) and **prob=0.50** (5× current)
-- Keep cooldown=30, ±8px range, ent_coef=0.006 — vary only probability
-- Fresh starts (not from checkpoint) — need full trajectories
-- Target 50M steps each
-- At 10%, a 60-point script (~264 frames) experiences ~2-3 perturbations. At 25%, ~5-6. At 50%, ~8-9. At some point the script's timed paddle positions are wrong too often.
+PPO_78/79/80/81/85/86/87/88/89/90/91 — all stopped. Results documented above.
 
-**Success criterion:** det=True shows MULTIPLE_SCRIPTS (3+ unique) at 50M steps on any replicate.
+### Experiment 8: Ball-Tracking Reward (SCRIPTS READY)
 
-### If Higher Probability Also Fails
+The perception POC proved NatureCNN can track the ball perfectly (1.9px MAE). PPO_85 proved that even with those features frozen in, the optimizer converges to a blind script. The Atari score signal is the dominant optimization attractor — it rewards brick-breaking, not ball-tracking. Experiment 8 tries to change what the optimizer optimizes for.
 
-If even prob=0.50 produces argmax scripts, the next step is multi-parameter perturbation — randomize both X and Y simultaneously (currently Y-only). A ±8px X perturbation would require the script to track ball X position, not just Y timing. Combined with Y-perturb, this makes the script problem 2D rather than 1D.
+All four train on **clean ALE** (no teleports, no noise). Eval/check also clean.
 
-### If That Also Fails
+| Run | Mode | Reward | Hypothesis |
+|-----|------|--------|------------|
+| **PPO_92** | Ball-hit only | +1.0/hit | Hit reward = brick reward → tracking enters gradient equally |
+| **PPO_93** | Ball-hit double | +2.0/hit | Hit reward > brick reward → tracking dominates optimization |
+| **PPO_94** | Descending proximity | 0.005/frame (descent-gated) | Only reward approach phase — cleaner gradient than un-gated |
+| **PPO_95** | Combined | hit=1.0 + prox=0.005 + survival=-0.0001 | All three signals for strongest possible tracking gradient |
 
-The fallback is to accept that PPO + NatureCNN on Breakout converges to scripts regardless of perturbation, and the real solution requires either:
-- A different architecture (e.g., transformer with attention over frames)
-- A different objective (e.g., inverse dynamics prediction as auxiliary loss)
-- A different game (Breakout may be structurally too simple to force reactive policies)
+**Key design differences from PPO_15 (failed):**
+- Pixel observations, not RAM (policy must extract ball position from pixels)
+- 1/20th to 1/5th the scale (PPO_15 used 0.1; we use 0.005 proximity)
+- Hit detection via state machine, not frame-by-frame proximity
+- Descent-gated proximity — only during approach, not ascent
+
+### Experiment 5 Complete: Discrete Teleport Dose-Response
+
+Full dose-response curve mapped across 7 runs:
+
+| Run | Magnitude | Peak det | Verdict |
+|-----|-----------|----------|---------|
+| PPO_78 | ±8px | 10pt | SINGLE_SCRIPT |
+| PPO_81 | ±30px | 21pt at 50M | SINGLE_SCRIPT — best dynamics result |
+| PPO_90 | ±30px (rep) | 13pt at 5M | SINGLE_SCRIPT — confirms ±30px sweet spot |
+| PPO_91 | ±35px | 0-5pt | SINGLE_SCRIPT — marginal, cliff zone (11M) |
+| PPO_89 | ±40px | 0pt | SINGLE_SCRIPT — dead by 5M (6M) |
+| PPO_87 | ±45px | 0pt | SINGLE_SCRIPT — dead, stoch collapsed (40M) |
+| PPO_88 | ±45px (rep) | 0pt | SINGLE_SCRIPT — confirms ±45px dead (35M) |
+
+**Conclusion:** Teleport magnitude changes which script gets memorized and how many points it scores. It does not change the outcome: every setting produces SINGLE_SCRIPT on clean ALE. The sweet spot at ±30px produces the best scripts but never breaks memorization.
 
 ### For New Sessions
 
 See `CURRENT_STATE.md` (this file) first — then:
 1. `EXPERIMENTS.md` — full experiment history including Experiment 4b and 4c
-2. `LOGICAL_AUDIT.md` — now 18 entries including L-017 (env mismatch false positive) and L-018 (entropy hypothesis falsification)
+2. `LOGICAL_AUDIT.md` — now 17 entries including L-017 (env mismatch false positive)
 3. `FLAWS.md` — 23 entries (F-022: env mismatch, F-023: missing resume logic)
 4. `CLAUDE.md` — critical rules, conventions, diagnostic checklist
 
