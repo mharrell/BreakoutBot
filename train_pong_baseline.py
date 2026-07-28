@@ -1,19 +1,18 @@
 """
-PPO_92 — Experiment 8a: Ball-Hit Reward (1.0/hit)
+Pong Baseline Probe — does PPO memorize a script in deterministic Pong?
 
-Rewards each paddle-ball contact equally to a brick break. The hypothesis:
-making ball-tracking as rewarding as scoring shifts the optimization landscape
-so that reactive policies occupy a higher local optimum than blind scripts.
+Pong is the perfect multi-env test case: like Breakout, it's fully deterministic
+(when playing against the ALE built-in AI). The opponent follows a fixed policy,
+so a timed sequence of paddle movements could theoretically win every game.
 
-Mode: "hit_only" — +1.0 per detected paddle-ball contact via RAM hit detection.
-Training: clean ALE/Breakout-v5 (no teleports, no noise).
-Eval/Check: clean ALE/Breakout-v5.
+Quick probe: 1 seed, 10M steps, nosticky verification at end.
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=1.0)
-  - Eval/Check: Clean ALE/Breakout-v5
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - "ALE/Pong-v5", frameskip=4
+  - No EpisodicLifeEnv (Pong has no lives — episode = 21-point game)
+  - No FireResetEnv (Pong has no FIRE action)
+  - Standard PPO: NatureCNN, ent_coef=0.006
+  - Target: 10M steps (~2 hours on RTX 3060 Ti)
 """
 import os
 import numpy as np
@@ -24,23 +23,20 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
+from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_92"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PONG_baseline"
+TARGET_STEPS = 10_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "hit_only"
-HIT_REWARD = 1.0
 ENT_COEF = 0.006
-SEED = 92
+SEED = 200
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -73,11 +69,10 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    env = gym.make("ALE/Pong-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
-    env = FireResetEnv(env)
-    env = EpisodicLifeEnv(env)
+    # No FireResetEnv — Pong has no FIRE action
+    # No EpisodicLifeEnv — Pong has no lives (21-point games)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
@@ -85,10 +80,8 @@ def make_training_env():
 
 
 def make_eval_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
+    env = gym.make("ALE/Pong-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
-    env = FireResetEnv(env)
-    env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
@@ -97,10 +90,8 @@ def make_eval_env():
 
 
 def make_check_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
+    env = gym.make("ALE/Pong-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
-    env = FireResetEnv(env)
-    env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
@@ -111,11 +102,10 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + ball-hit auxiliary reward")
-    print(f"  Eval/Check: Clean ALE (no auxiliary reward)")
-    print(f"  Hypothesis: hit reward = brick reward → tracking enters gradient")
+    print(f"{RUN_NAME} — Multi-Env Probe: Deterministic Pong")
+    print(f"  Hypothesis: Pong's deterministic opponent enables script memorization")
+    print(f"  Target: {TARGET_STEPS:,} steps (~2 hours)")
+    print(f"  No EpisodicLifeEnv (Pong has no lives)")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -137,10 +127,10 @@ if __name__ == "__main__":
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
         n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_92 — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)",
-            f"Mode: {MODE} | Training: clean ALE + ball-hit aux reward",
-            f"Eval/Check: clean ALE (no auxiliary reward)",
-            f"Hypothesis: hit=1.0 makes tracking as rewarding as scoring",
+            f"PONG_baseline — Multi-Env Probe",
+            f"Env: ALE/Pong-v5 (deterministic opponent)",
+            f"No EpisodicLifeEnv (Pong has no lives)",
+            f"Hypothesis: deterministic opponent → SINGLE_SCRIPT",
             f"Policy: NatureCNN, ent_coef={ENT_COEF}",
         ])
 

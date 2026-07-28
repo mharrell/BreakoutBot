@@ -1,19 +1,32 @@
 """
-PPO_92 — Experiment 8a: Ball-Hit Reward (1.0/hit)
+PPO_102 — Experiment 11: Ball-Tracking Representation Supervision
 
-Rewards each paddle-ball contact equally to a brick break. The hypothesis:
-making ball-tracking as rewarding as scoring shifts the optimization landscape
-so that reactive policies occupy a higher local optimum than blind scripts.
+BeamRider proved that hard failure constraints force reactive policies. But
+Breakout's soft failure mode means PPO can always find a degenerate script.
 
-Mode: "hit_only" — +1.0 per detected paddle-ball contact via RAM hit detection.
-Training: clean ALE/Breakout-v5 (no teleports, no noise).
-Eval/Check: clean ALE/Breakout-v5.
+Instead of changing the reward or environment, this experiment changes the
+FEATURES THEMSELVES. A ball-position prediction head is jointly trained
+with PPO on the shared CNN features. The CNN receives gradients from both:
+  1. PPO policy/value loss — learn to play Breakout
+  2. Ball-position MSE loss  — learn to see the ball
+
+If ball position is baked into the features, any policy that uses those
+features MUST be reactive. PPO can't "choose" to ignore the ball when the
+features literally encode ball (x, y).
+
+Unlike PPO_85 (frozen pre-trained features → collapse), the aux gradient
+stays alive DURING policy learning, preventing the features from drifting
+into a representation that supports blind scripts.
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=1.0)
-  - Eval/Check: Clean ALE/Breakout-v5
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - BallPositionWrapper reads ball (x,y) from RAM into info dict
+  - BallPositionRecorder accumulates ball positions from VecEnv steps
+  - BallTrackingCallback trains aux head after each PPO rollout
+  - Aux head: CNN features (512) -> Linear(64) -> ReLU -> Linear(2) -> (x,y)
+  - Separate Adam optimizer for CNN + aux head (lr=1e-4)
+  - Standard PPO: NatureCNN, ent_coef=0.006
+  - Eval/Check: Clean ALE (no aux supervision, standard wrappers)
+  - Target: 50M steps
 """
 import os
 import numpy as np
@@ -27,20 +40,22 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
+from ball_position_wrapper import BallPositionWrapper
+from ball_tracking_callback import BallTrackingCallback, BallPositionRecorder
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_92"
+RUN_NAME = "PPO_102"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "hit_only"
-HIT_REWARD = 1.0
+AUX_LR = 1e-4
+AUX_BATCH = 256
+AUX_EPOCHS = 2
 ENT_COEF = 0.006
-SEED = 92
+SEED = 102
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -74,7 +89,8 @@ def get_latest_checkpoint(path):
 
 def make_training_env():
     env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    # BallPositionWrapper BEFORE wrappers that modify obs (reads RAM directly)
+    env = BallPositionWrapper(env)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
     env = EpisodicLifeEnv(env)
@@ -111,15 +127,18 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + ball-hit auxiliary reward")
-    print(f"  Eval/Check: Clean ALE (no auxiliary reward)")
-    print(f"  Hypothesis: hit reward = brick reward → tracking enters gradient")
+    print(f"{RUN_NAME} — Experiment 11: Ball-Tracking Representation Supervision")
+    print(f"  Aux LR: {AUX_LR} | Batch: {AUX_BATCH} | Epochs: {AUX_EPOCHS}")
+    print(f"  Training: Clean ALE + ball-position aux supervision on CNN features")
+    print(f"  Eval/Check: Clean ALE (no aux supervision)")
+    print(f"  Hypothesis: ball position in features -> reactive policy by construction")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
+    # Wrap AFTER VecFrameStack so recorder sees the same 4-frame obs as the policy
+    recorder = BallPositionRecorder(env)
+    env = recorder
 
     eval_env = DummyVecEnv([make_eval_env])
     eval_env = VecFrameStack(eval_env, n_stack=4)
@@ -133,19 +152,32 @@ if __name__ == "__main__":
         save_freq=100_000, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
+    ball_tracking_callback = BallTrackingCallback(
+        recorder=recorder,
+        aux_lr=AUX_LR,
+        batch_size=AUX_BATCH,
+        aux_epochs=AUX_EPOCHS,
+        verbose=1,
+    )
+
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
         n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_92 — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)",
-            f"Mode: {MODE} | Training: clean ALE + ball-hit aux reward",
-            f"Eval/Check: clean ALE (no auxiliary reward)",
-            f"Hypothesis: hit=1.0 makes tracking as rewarding as scoring",
+            f"PPO_102 — Experiment 11: Ball-Tracking Representation Supervision",
+            f"Training: clean ALE + ball-position aux loss on shared CNN features",
+            f"Aux: CNN(512)->Linear(64)->ReLU->Linear(2)->(ball_x,ball_y) | "
+            f"lr={AUX_LR} batch={AUX_BATCH} epochs={AUX_EPOCHS}",
+            f"Eval/Check: Clean ALE (no aux supervision)",
+            f"Hypothesis: ball-encoding features -> reactive policy by construction",
             f"Policy: NatureCNN, ent_coef={ENT_COEF}",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([
+        eval_callback, checkpoint_callback, ball_tracking_callback,
+        memorization_callback, label_callback,
+    ])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

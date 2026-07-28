@@ -1,17 +1,23 @@
 """
-PPO_92 — Experiment 8a: Ball-Hit Reward (1.0/hit)
+PPO_98 — Experiment 8e: Ball-Hit Reward (1.0/hit) + Raw Atari Scores
 
-Rewards each paddle-ball contact equally to a brick break. The hypothesis:
-making ball-tracking as rewarding as scoring shifts the optimization landscape
-so that reactive policies occupy a higher local optimum than blind scripts.
+PPO_92 showed that with ClipRewardEnv (every brick = 1.0), the 1.0/hit auxiliary
+reward competes at equal weight with brick-breaking. The agent optimizes for
+paddle hits because they're denser — you can hit the ball without breaking bricks.
 
-Mode: "hit_only" — +1.0 per detected paddle-ball contact via RAM hit detection.
-Training: clean ALE/Breakout-v5 (no teleports, no noise).
-Eval/Check: clean ALE/Breakout-v5.
+This variant REMOVES ClipRewardEnv so raw Atari scores flow through: top-row
+bricks are 7 points, bottom-row bricks are 1 point. A single orange brick (7 pts)
+is worth 7× a paddle hit. The Atari score gradient should naturally dominate the
+auxiliary signal, forcing the agent to learn brick-breaking AND ball-tracking
+rather than farming the auxiliary reward.
+
+Training: raw Atari scores + 1.0/hit auxiliary reward.
+Eval/Check: clean ALE/Breakout-v5 (standard ClipRewardEnv for comparability).
 
 Design:
   - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=1.0)
-  - Eval/Check: Clean ALE/Breakout-v5
+               NO ClipRewardEnv — raw Atari scores (1-7/brick)
+  - Eval/Check: Clean ALE/Breakout-v5 (standard ClipRewardEnv)
   - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
   - Target:     50M steps
 """
@@ -33,14 +39,14 @@ from run_label_callback import RunLabelCallback
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_92"
+RUN_NAME = "PPO_98"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 MODE = "hit_only"
 HIT_REWARD = 1.0
 ENT_COEF = 0.006
-SEED = 92
+SEED = 98
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -79,7 +85,6 @@ def make_training_env():
     env = FireResetEnv(env)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
-    env = ClipRewardEnv(env)
     env = Monitor(env)
     return env
 
@@ -111,11 +116,11 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)")
+    print(f"{RUN_NAME} — Experiment 8e: Ball-Hit Reward (1.0/hit) + Raw Atari Scores")
     print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + ball-hit auxiliary reward")
-    print(f"  Eval/Check: Clean ALE (no auxiliary reward)")
-    print(f"  Hypothesis: hit reward = brick reward → tracking enters gradient")
+    print(f"  Training: Clean ALE + ball-hit aux reward, NO ClipRewardEnv (raw scores)")
+    print(f"  Eval/Check: Clean ALE (standard ClipRewardEnv)")
+    print(f"  Hypothesis: raw brick scores (1-7) dominate 1.0/hit → learns bricks first")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -137,10 +142,10 @@ if __name__ == "__main__":
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
         n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_92 — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)",
-            f"Mode: {MODE} | Training: clean ALE + ball-hit aux reward",
-            f"Eval/Check: clean ALE (no auxiliary reward)",
-            f"Hypothesis: hit=1.0 makes tracking as rewarding as scoring",
+            f"PPO_98 — Experiment 8e: Ball-Hit Reward (1.0/hit) + Raw Scores",
+            f"Mode: {MODE} | Training: NO ClipRewardEnv (raw Atari scores 1-7/brick)",
+            f"Eval/Check: standard ClipRewardEnv for comparability",
+            f"Hypothesis: raw 7pt bricks dominate 1pt paddle hits → natural curriculum",
             f"Policy: NatureCNN, ent_coef={ENT_COEF}",
         ])
 

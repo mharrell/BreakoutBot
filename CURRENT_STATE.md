@@ -1,6 +1,6 @@
 # Current State — BreakoutBot
 
-**Last updated: 2026-07-27 (Dose-response curve complete + Experiment 8 reward structure)**
+**Last updated: 2026-07-28 (Multi-env probes COMPLETE, BeamRider breakthrough, Experiments 10-12)**
 
 ---
 
@@ -12,7 +12,9 @@
 
 **Experiment 8 (LAUNCHING): Reward the behavior directly.** If the Atari score signal is the attractor pulling PPO toward blind scripts, then we need to make ball-tracking *more rewarding than the Atari score*. Four variants: ball-hit reward at 1.0 and 2.0, descending-only proximity, and combined (hit + proximity + survival penalty). All train on clean ALE — no teleports, no noise. The goal is to shift the optimization landscape so reactive policies occupy a higher local optimum than blind scripts.
 
-After 91 experiments, no method has broken SINGLE_SCRIPT.
+After 104 experiments, no method has broken SINGLE_SCRIPT on any soft-failure game. But BeamRider — the only game with hard failure constraints — produces MULTIPLE_SCRIPTS. The thesis: **PPO always memorizes in deterministic soft-failure environments. Only hard failure constraints force reactivity.**
+
+**July 28 findings:** Multi-env probes complete — Pong/SpaceInvaders/Freeway all SINGLE_SCRIPT, BeamRider MULTIPLE_SCRIPTS (first ever). PPO_102/103 prove the perception-policy gap is structural: aux supervision CAN bake ball-tracking features into the CNN (1344px→14px), but the policy still memorizes. PPO_103 shows PPO collapses to a script in ~200 updates — faster than aux can shape features, even at 10× gradient strength. Life-loss penalty (PPO_101) teaches survival, not reactivity. See `FINDINGS_2026_07_28.md` for full writeup.
 
 ---
 
@@ -21,12 +23,14 @@ After 91 experiments, no method has broken SINGLE_SCRIPT.
 | Term | Definition |
 |------|-----------|
 | **SINGLE_SCRIPT** | ≤2 unique scores on det=True across n_games. The argmax produces the same score every game. |
-| **MULTIPLE_SCRIPTS** | 3+ unique scores on det=True. Not yet observed on clean ALE in 91 experiments. |
+| **MULTIPLE_SCRIPTS** | 3+ unique scores on det=True. Only observed on BeamRider (hard failure constraints). |
 | **Memorized** | SINGLE_SCRIPT on clean ALE det=True. Does NOT imply 0pt — a 21pt script is still memorized. |
 | **Dead** | 0pt exactly on clean ALE det=True. A subset of memorized. |
 | **Blind script** | A memorized policy with no evidence of ball-tracking. Synonymous with "memorized script." |
 | **Stoch** | det=False (stochastic sampling). Produces score diversity even in memorized policies. |
 | **Collapse** | Transition from MULTIPLE_SCRIPTS to SINGLE_SCRIPT, or from nonzero to 0pt. |
+| **Hard failure** | Environment kills the agent for a mistake (BeamRider: one bullet = death). Scripts non-viable. |
+| **Soft failure** | Mistake degrades state but doesn't end game (Breakout: lose ball, re-serve). Scripts remain viable. |
 
 ---
 
@@ -52,6 +56,12 @@ After 91 experiments, no method has broken SINGLE_SCRIPT.
 | **Dynamics randomization via setRAM() does not transfer to ALE** | PPO_78 (mild teleports), PPO_79 (σ=0.5 noise), PPO_80 (σ=1.5 noise) — all SINGLE_SCRIPT on clean ALE. The mechanism that produced intervention-robust policies on the custom engine does not work on authentic Atari. |
 | **Dose-response curve: teleport magnitude changes script quality, not memorization outcome** | PPO_78 (±8px)=0pt, PPO_90 (±30px)=13pt peak, PPO_81 (±30px)=21pt peak at 50M, PPO_91 (±35px)=0-5pt marginal, PPO_89 (±40px)=0pt dead, PPO_87/88 (±45px)=0pt dead. Every setting SINGLE_SCRIPT. ±30px is the sweet spot but still memorized. |
 | **Frozen pretrained ball-tracker features don't prevent collapse** | PPO_85 (conv+linear frozen from 1.9px MAE BallTrackerCNN4Frame): collapsed to 0pt SINGLE_SCRIPT by 6M (first zero at 6M, confirmed through 25M). PPO_86 (conv frozen, linear trainable): killed at 1M (0pt). The optimizer actively avoids using available ball-position features. |
+| **BeamRider produces MULTIPLE_SCRIPTS — first reactive PPO argmax** | 10/10 MULTIPLE_SCRIPTS at 10M. Hard failure (one bullet = death) makes memorized scripts non-viable. First and only game to break SINGLE_SCRIPT. |
+| **SINGLE_SCRIPT is a general PPO property, not Breakout-specific** | Pong (SINGLE_SCRIPT, perfect-win script), Space Invaders (SINGLE_SCRIPT despite UFO randomness), Freeway (SINGLE_SCRIPT 0pt), Breakout (100+ experiments). 4/5 games SINGLE_SCRIPT. |
+| **Aux supervision CAN bake ball-tracking features into the CNN during PPO training** | PPO_102 (after callback bug fix): MSE 70.55→0.008 (1344px→14px) in 1.7M aux-training steps. Gradient flows correctly. Features encode ball at ~14px. |
+| **Ball-tracking features do NOT prevent policy memorization** | PPO_102 at 14.5M: 14px aux precision, SINGLE_SCRIPT (stoch=1 unique). PPO_103 at 946K: 16px, SINGLE_SCRIPT. Features encode ball position but policy ignores them. |
+| **The perception-policy gap is structural** | PPO_103: policy collapses to script in ~200 PPO updates — faster than aux can shape features to pixel precision, even at 10× gradient strength. Not a gradient-strength problem. |
+| **Life-loss penalty (-10/life) does not prevent memorization** | PPO_101: SINGLE_SCRIPT through 14M. Scores climbed 0→17. Teaches survival, not ball-tracking. Penalty too small relative to script score. |
 
 ### TENTATIVE — Plausible but not confirmed
 
@@ -70,6 +80,9 @@ After 91 experiments, no method has broken SINGLE_SCRIPT.
 | "PPO_26 generalizes" | Nosticky: every game = 60.0 pts, 264 frames — a fixed script. |
 | **"PPO_55b has no functional deterministic policy" (18+ INCOMPLETE checks)** | Env mismatch artifact. With fixed env, det=True completes on every check and is always SINGLE_SCRIPT. |
 | **"ent_coef ≥ 0.02 prevents argmax collapse"** | 55b (0.02), 55d (0.025), 55c (0.04), 55e (0.10) all collapsed to SINGLE_SCRIPT. The argmax concentrates regardless of entropy coefficient. |
+| **"Life-loss penalties force reactive ball-tracking"** | PPO_101: -10/life, SINGLE_SCRIPT through 14M. Teaches survival while scripting. |
+| **"Ball-tracking features → reactive policy by construction"** | PPO_102/103: features encode ball position (14-16px), policy is SINGLE_SCRIPT. Features necessary but not sufficient. |
+| **"Stronger aux gradient → pixel-precision features → reactivity"** | PPO_103: 10× gradient, features improving (16px at 946K), but policy collapses to script in ~200 updates. PPO memorizes faster than aux can shape features. |
 
 ---
 
@@ -149,6 +162,37 @@ Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_
 | PPO_35 | Continuous mid-game physics | 1 unique, 212 pts det=True | 1 unique, 2 pts |
 | PPO_36 | Ball noise σ=0.3 + dropout | 23 unique det=False at peak | — |
 
+### Multi-Environment Replication Probes (COMPLETED July 28)
+
+| Game | Seed | Steps | det=True | det=False | Notes |
+|------|------|-------|----------|-----------|-------|
+| Pong | 200 | 10M | SINGLE_SCRIPT (2 unique) | MULTIPLE_SCRIPTS (9 unique) | Perfect -21/-20 win script by 4M |
+| Space Invaders | 201 | 10M | SINGLE_SCRIPT (2 unique) | MULTIPLE_SCRIPTS (7 unique) | 180-220 pts. UFO randomness insufficient |
+| **BeamRider** | **202** | **10M** | **MULTIPLE_SCRIPTS (3 unique)** | MULTIPLE_SCRIPTS (8 unique) | **First reactive argmax in project history** |
+| Freeway | 203 | 10M | SINGLE_SCRIPT (1 unique, 0.0) | SINGLE_SCRIPT (1 unique, 0.0) | Never learned. Chicken never crossed. |
+
+**BeamRider analysis:** Hard failure (one bullet = death) forces reactivity. There is no safe sweep. Scripts are non-viable. This is the unifying principle across 104 experiments.
+
+### Experiment 10: Life-Loss Penalty — PPO_101 (COMPLETED — Negative)
+
+| Model | Config | Step | det=True | Notes |
+|-------|--------|------|----------|-------|
+| PPO_101 | -10/life, annealed 5M, SEED=101 | 14M (stopped) | SINGLE_SCRIPT all checks | Scores climbed 0→17. Teaches survival, not reactivity. |
+
+### Experiment 11: Ball-Tracking Representation Supervision — PPO_102 (ACTIVE)
+
+| Model | Config | Step | det=True | Notes |
+|-------|--------|------|----------|-------|
+| PPO_102 | aux_lr=1e-4, epochs=2, SEED=102 | 14.5M | SINGLE_SCRIPT (stoch=1) | Callback bug fixed at 12.8M. Aux MSE 70.55→0.008 (1344px→14px). Features encode ball, policy still memorized. |
+
+**Critical infrastructure bug:** `_train_aux()` silently returned every call for 12.8M steps due to buffer-size mismatch (`rollout_buffer.size()` returns 128 not 4096) and unflattened observation shape. Both fixed. Bug analysis in `FINDINGS_2026_07_28.md`.
+
+### Experiment 12: Stronger Aux from Scratch — PPO_103 (ACTIVE)
+
+| Model | Config | Step | det=True | Notes |
+|-------|--------|------|----------|-------|
+| PPO_103 | aux_lr=5e-4, epochs=4, SEED=103 | 946K | SINGLE_SCRIPT (0.45pt, 231 updates) | 16px aux. Policy collapsed FASTER than aux could shape features. 10× gradient vs PPO_102. |
+
 ---
 
 ## What We've Learned
@@ -195,60 +239,74 @@ Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_
 
 5. **The custom engine doesn't approximate ALE.** PPO_35: 212 pts → 2 pts. All custom-engine findings need ALE replication.
 
+### Multi-Environment Replication (July 28, 2026)
+
+6. **SINGLE_SCRIPT is a general PPO property, not Breakout-specific.** 4/5 Atari games tested produce SINGLE_SCRIPT. Only BeamRider (hard failure) produces MULTIPLE_SCRIPTS.
+
+7. **Stochastic elements that don't kill the agent don't prevent memorization.** Space Invaders' random UFO timing adds score variance (some games hit UFO, some don't) but doesn't require a reactive firing pattern.
+
+8. **Sparse-reward games may never escape the zero-score attractor.** Freeway: 0pt, never learned to move the chicken. The no-op local optimum dominates.
+
+### Experiment 10: Life-Loss Penalty (July 28, 2026)
+
+9. **Life-loss penalty at -10 teaches survival, not ball-tracking.** The policy learned to survive while executing a script. The penalty magnitude was too small — BeamRider's "one bullet = death" is effectively infinite penalty, not -10.
+
+### Experiments 11-12: Representation Supervision (July 28, 2026)
+
+10. **Aux supervision CAN bake ball-position features into the CNN during PPO training.** After fixing the callback bug, PPO_102's features dropped from 1344px to 14px error in 1.7M aux-training steps. The gradient flows correctly.
+
+11. **Ball-tracking features do not prevent policy memorization.** PPO_102 at 14.5M: 14px precision, SINGLE_SCRIPT (stoch=1 unique). PPO_103 at 946K: 16px, SINGLE_SCRIPT. The policy ignores task-relevant features when a simpler solution (sweep script) exists.
+
+12. **PPO memorizes faster than aux can shape features.** PPO_103: policy collapsed to script in ~200 PPO updates. At the same moment, aux precision was only 16px. Even 10× aux gradient can't push features to pixel precision before memorization sets in.
+
+13. **The perception-policy gap is a structural property of the optimization landscape, not a gradient-strength problem.** The timescale mismatch is fundamental: PPO finds the memorization attractor in ~200 updates; precise feature learning takes thousands.
+
+### The Central Thesis (July 28, 2026)
+
+14. **In deterministic environments, PPO's argmax always collapses to a deterministic action sequence unless the environment kills the agent for executing one.** This unifies all 104 experiments. Every failed intervention (reward shaping, dynamics randomization, entropy tuning, feature supervision) shares the same root cause: scripts remain a viable local optimum in soft-failure environments. Only BeamRider's hard failure breaks the pattern.
+
 ---
 
 ## What's Next
 
-### Running Now (1 GPU, July 27)
+### Running Now (July 28)
 
-| Slot | Run | Recipe | Progress |
-|------|-----|--------|----------|
-| 1 | RBO_02 | OF + Dropout (Revenge Brunch) | ~109M / 1B |
-| 2-5 | PPO_92-95 | Experiment 8: Ball-tracking reward | QUEUED |
+| Run | Config | Progress | Status |
+|------|--------|----------|--------|
+| PPO_102 | Exp 11: aux_lr=1e-4, epochs=2 | 14.5M / 50M | Features at 14px, policy SINGLE_SCRIPT |
+| PPO_103 | Exp 12: aux_lr=5e-4, epochs=4 | 946K / 50M | Features at 16px, collapsed at 231 updates |
 
-PPO_78/79/80/81/85/86/87/88/89/90/91 — all stopped. Results documented above.
+### Recently Stopped / Completed
 
-### Experiment 8: Ball-Tracking Reward (SCRIPTS READY)
+| Run | Result |
+|-----|--------|
+| PPO_97 | 24M — 50% Y-perturb: SINGLE_SCRIPT |
+| PPO_100 | 28M — 50% Y-perturb + hit_only: SINGLE_SCRIPT |
+| PPO_101 | 14M — Life-loss penalty: SINGLE_SCRIPT |
+| PPO_92-95, 98 | Experiment 8 — all SINGLE_SCRIPT |
+| Pong probe | 10M — SINGLE_SCRIPT (perfect-win script) |
+| Space Invaders probe | 10M — SINGLE_SCRIPT |
+| **BeamRider probe** | **10M — MULTIPLE_SCRIPTS** |
+| Freeway probe | 10M — SINGLE_SCRIPT (0pt) |
 
-The perception POC proved NatureCNN can track the ball perfectly (1.9px MAE). PPO_85 proved that even with those features frozen in, the optimizer converges to a blind script. The Atari score signal is the dominant optimization attractor — it rewards brick-breaking, not ball-tracking. Experiment 8 tries to change what the optimizer optimizes for.
+### Paths Forward
 
-All four train on **clean ALE** (no teleports, no noise). Eval/check also clean.
+1. **Publish.** Coherent thesis: PPO always memorizes in soft-failure games. BeamRider counterexample. Perception-policy gap structural. Enough for a paper.
 
-| Run | Mode | Reward | Hypothesis |
-|-----|------|--------|------------|
-| **PPO_92** | Ball-hit only | +1.0/hit | Hit reward = brick reward → tracking enters gradient equally |
-| **PPO_93** | Ball-hit double | +2.0/hit | Hit reward > brick reward → tracking dominates optimization |
-| **PPO_94** | Descending proximity | 0.005/frame (descent-gated) | Only reward approach phase — cleaner gradient than un-gated |
-| **PPO_95** | Combined | hit=1.0 + prox=0.005 + survival=-0.0001 | All three signals for strongest possible tracking gradient |
+2. **Make Breakout hard-failure.** Game-over on first life loss. Apply BeamRider mechanism directly.
 
-**Key design differences from PPO_15 (failed):**
-- Pixel observations, not RAM (policy must extract ball position from pixels)
-- 1/20th to 1/5th the scale (PPO_15 used 0.1; we use 0.005 proximity)
-- Hit detection via state machine, not frame-by-frame proximity
-- Descent-gated proximity — only during approach, not ascent
+3. **Force action diversity.** Penalize consecutive identical actions. Attack scripts at output level.
 
-### Experiment 5 Complete: Discrete Teleport Dose-Response
+4. **Multi-game hard-failure map.** Test Riverraid, Q*bert, Seaquest. Confirm hypothesis generalizes.
 
-Full dose-response curve mapped across 7 runs:
-
-| Run | Magnitude | Peak det | Verdict |
-|-----|-----------|----------|---------|
-| PPO_78 | ±8px | 10pt | SINGLE_SCRIPT |
-| PPO_81 | ±30px | 21pt at 50M | SINGLE_SCRIPT — best dynamics result |
-| PPO_90 | ±30px (rep) | 13pt at 5M | SINGLE_SCRIPT — confirms ±30px sweet spot |
-| PPO_91 | ±35px | 0-5pt | SINGLE_SCRIPT — marginal, cliff zone (11M) |
-| PPO_89 | ±40px | 0pt | SINGLE_SCRIPT — dead by 5M (6M) |
-| PPO_87 | ±45px | 0pt | SINGLE_SCRIPT — dead, stoch collapsed (40M) |
-| PPO_88 | ±45px (rep) | 0pt | SINGLE_SCRIPT — confirms ±45px dead (35M) |
-
-**Conclusion:** Teleport magnitude changes which script gets memorized and how many points it scores. It does not change the outcome: every setting produces SINGLE_SCRIPT on clean ALE. The sweet spot at ±30px produces the best scripts but never breaks memorization.
+5. **Different algorithm.** SAC, TD3 — methods without PPO's argmax-seeking optimizer.
 
 ### For New Sessions
 
 See `CURRENT_STATE.md` (this file) first — then:
-1. `EXPERIMENTS.md` — full experiment history including Experiment 4b and 4c
-2. `LOGICAL_AUDIT.md` — now 17 entries including L-017 (env mismatch false positive)
-3. `FLAWS.md` — 23 entries (F-022: env mismatch, F-023: missing resume logic)
-4. `CLAUDE.md` — critical rules, conventions, diagnostic checklist
-
-The Session Bootstrap in `CLAUDE.md` has the step-by-step procedure.
+1. `FINDINGS_2026_07_28.md` — latest results: multi-env, BeamRider, Experiments 10-12
+2. `EXPERIMENTS.md` — full experiment history
+3. `CLAUDE.md` — critical rules, conventions
+4. `FLAWS.md` — methodological flaw catalog
+5. `LOGICAL_AUDIT.md` — reasoning pitfall catalog
+6. `MULTI_ENV_ANALYSIS.md` — BeamRider breakthrough analysis

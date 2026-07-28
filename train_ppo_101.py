@@ -1,19 +1,28 @@
 """
-PPO_92 — Experiment 8a: Ball-Hit Reward (1.0/hit)
+PPO_101 — Experiment 10: Life-Loss Penalty
 
-Rewards each paddle-ball contact equally to a brick break. The hypothesis:
-making ball-tracking as rewarding as scoring shifts the optimization landscape
-so that reactive policies occupy a higher local optimum than blind scripts.
+BeamRider proved that hard failure constraints force reactive PPO policies.
+Breakout's failure mode is soft — lose the ball, bricks stay broken, re-serve.
+Scripts that break 3-5 bricks per life are locally optimal.
 
-Mode: "hit_only" — +1.0 per detected paddle-ball contact via RAM hit detection.
-Training: clean ALE/Breakout-v5 (no teleports, no noise).
-Eval/Check: clean ALE/Breakout-v5.
+This experiment adds a negative reward on every life loss, making memorized
+sweep scripts net-negative:
+    Sweep script:  +4 (bricks) - 10 (penalty) = -6 net
+    Do nothing:     0 reward
+    Reactive play: +30 (bricks) - 10 (penalty) = +20 net
+
+The penalty is annealed from 0→10 over 5M steps to avoid crushing exploration
+before the agent learns basic gameplay.
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=1.0)
-  - Eval/Check: Clean ALE/Breakout-v5
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - LifeLossPenalty BEFORE EpisodicLifeEnv, AFTER ClipRewardEnv
+    (so penalty isn't clipped to -1 by ClipRewardEnv)
+  - Wrapper order: ALE → NoopReset → FireReset → EpisodicLife →
+    GrayscaleResize → ClipRewardEnv → LifeLossPenalty → Monitor
+  - Standard PPO: NatureCNN, ent_coef=0.006
+  - Training: ALE/Breakout-v5, frameskip=1
+  - Eval/Check: Clean ALE/Breakout-v5 (no penalty, standard wrappers)
+  - Target: 50M steps
 """
 import os
 import numpy as np
@@ -27,20 +36,20 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
+from life_loss_penalty import LifeLossPenalty
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_92"
+RUN_NAME = "PPO_101"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "hit_only"
-HIT_REWARD = 1.0
+PENALTY = 10.0
+ANNEAL_STEPS = 5_000_000
 ENT_COEF = 0.006
-SEED = 92
+SEED = 101
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -74,12 +83,14 @@ def get_latest_checkpoint(path):
 
 def make_training_env():
     env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    # Standard Atari wrappers first (closest to ALE)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
+    # LifeLossPenalty AFTER ClipRewardEnv so penalty isn't clipped to [-1,+1]
+    env = LifeLossPenalty(env, penalty=PENALTY, anneal_steps=ANNEAL_STEPS)
     env = Monitor(env)
     return env
 
@@ -111,11 +122,11 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + ball-hit auxiliary reward")
-    print(f"  Eval/Check: Clean ALE (no auxiliary reward)")
-    print(f"  Hypothesis: hit reward = brick reward → tracking enters gradient")
+    print(f"{RUN_NAME} -- Experiment 10: Life-Loss Penalty ({PENALTY}/life)")
+    print(f"  Penalty: {PENALTY}/life loss, annealed over {ANNEAL_STEPS:,} steps")
+    print(f"  Training: Clean ALE + life-loss penalty (after ClipRewardEnv)")
+    print(f"  Eval/Check: Clean ALE (no penalty, standard wrappers)")
+    print(f"  Hypothesis: scripts net-negative -> PPO forced toward reactive play")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -137,10 +148,10 @@ if __name__ == "__main__":
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
         n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_92 — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)",
-            f"Mode: {MODE} | Training: clean ALE + ball-hit aux reward",
-            f"Eval/Check: clean ALE (no auxiliary reward)",
-            f"Hypothesis: hit=1.0 makes tracking as rewarding as scoring",
+            f"PPO_101 -- Experiment 10: Life-Loss Penalty ({PENALTY}/life)",
+            f"Training: clean ALE + {PENALTY}/life penalty (annealed {ANNEAL_STEPS:,} steps)",
+            f"Eval/Check: Clean ALE (no penalty)",
+            f"Hypothesis: scripts net-negative -> forced toward reactive play",
             f"Policy: NatureCNN, ent_coef={ENT_COEF}",
         ])
 

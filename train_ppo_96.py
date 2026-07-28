@@ -1,17 +1,18 @@
 """
-PPO_92 — Experiment 8a: Ball-Hit Reward (1.0/hit)
+PPO_96 — Experiment 5a: Y-Perturb at 25% Probability
 
-Rewards each paddle-ball contact equally to a brick break. The hypothesis:
-making ball-tracking as rewarding as scoring shifts the optimization landscape
-so that reactive policies occupy a higher local optimum than blind scripts.
+Tests whether higher perturbation probability breaks argmax memorization. At
+prob=0.10 (PPO_55/57/58), memorized scripts experience ~2-3 perturbations per
+game — enough to sustain det=False diversity but not enough to prevent det=True
+SINGLE_SCRIPT. At prob=0.25, scripts face ~5-6 perturbations per game.
 
-Mode: "hit_only" — +1.0 per detected paddle-ball contact via RAM hit detection.
-Training: clean ALE/Breakout-v5 (no teleports, no noise).
-Eval/Check: clean ALE/Breakout-v5.
+Hypothesis: at some probability threshold, timed scripts become non-viable
+because the ball arrives at a different time than the script expects. The
+argmax must observe actual ball position rather than replay a fixed sequence.
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=1.0)
-  - Eval/Check: Clean ALE/Breakout-v5
+  - Training:  ALE/Breakout-v5 + Y-perturb (25%/30f/±8px)
+  - Eval/Check: Clean ALE/Breakout-v5 (no perturbation)
   - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
   - Target:     50M steps
 """
@@ -27,20 +28,21 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
+from ale_dynamics_randomized import ALEBreakoutDynamicsRandomized
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_92"
+RUN_NAME = "PPO_96"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "hit_only"
-HIT_REWARD = 1.0
+BALL_Y_PROB = 0.25
+COOLDOWN = 30
+BALL_Y_RANGE = 8
 ENT_COEF = 0.006
-SEED = 92
+SEED = 96
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -74,7 +76,15 @@ def get_latest_checkpoint(path):
 
 def make_training_env():
     env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    env = ALEBreakoutDynamicsRandomized(
+        env,
+        ball_y_prob=BALL_Y_PROB,
+        ball_x_prob=0.0,
+        paddle_x_prob=0.0,
+        cooldown_frames=COOLDOWN,
+        ball_y_range=BALL_Y_RANGE,
+        seed=SEED,
+    )
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
     env = EpisodicLifeEnv(env)
@@ -111,11 +121,11 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + ball-hit auxiliary reward")
-    print(f"  Eval/Check: Clean ALE (no auxiliary reward)")
-    print(f"  Hypothesis: hit reward = brick reward → tracking enters gradient")
+    print(f"{RUN_NAME} — Experiment 5a: Y-Perturb at {BALL_Y_PROB*100:.0f}% Probability")
+    print(f"  Ball Y prob: {BALL_Y_PROB} | Cooldown: {COOLDOWN}f | Range: ±{BALL_Y_RANGE}px")
+    print(f"  Training: ALE + Y-perturb (ball-only dynamics randomization)")
+    print(f"  Eval/Check: Clean ALE (no perturbation)")
+    print(f"  Hypothesis: ~5-6 perturbations/game → timed scripts non-viable")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -137,10 +147,11 @@ if __name__ == "__main__":
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
         n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_92 — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)",
-            f"Mode: {MODE} | Training: clean ALE + ball-hit aux reward",
-            f"Eval/Check: clean ALE (no auxiliary reward)",
-            f"Hypothesis: hit=1.0 makes tracking as rewarding as scoring",
+            f"PPO_96 — Experiment 5a: Y-Perturb at {BALL_Y_PROB*100:.0f}%",
+            f"Cooldown: {COOLDOWN}f | Range: ±{BALL_Y_RANGE}px",
+            f"Training: ALE + Y-perturb dynamics randomization",
+            f"Eval/Check: Clean ALE (no perturbation)",
+            f"Hypothesis: ~5-6 perturbations/game break timed scripts",
             f"Policy: NatureCNN, ent_coef={ENT_COEF}",
         ])
 

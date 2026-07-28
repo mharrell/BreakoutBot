@@ -1344,3 +1344,136 @@ Caveats: the memorization check at 12.8M still returned MEMORIZED (2 unique scor
 2. **Is dynamics randomization enough, or do we need perceptual randomization too?** The ideal solution likely combines both: the agent can't memorize pixels AND can't memorize timed sequences. But one variable at a time — test dynamics first.
 3. **What RAM addresses actually exist for Breakout physics parameters?** The probe script needs to happen before committing to Option B. Don't design around capabilities we haven't confirmed.
 4. **Is there already a "variable Breakout" ROM?** The homebrew community has been hacking Atari games for 40+ years. Worth searching before building our own.
+
+---
+
+## Multi-Env Replication Probes (July 28, 2026 — COMPLETED)
+
+Four Atari games probed at 10M steps with standard PPO (NatureCNN, ent_coef=0.006, no sticky actions, det=True on clean env).
+
+| Game | Seed | Steps | Games | det=True | det=False | Notes |
+|------|------|-------|-------|----------|-----------|-------|
+| Pong | 200 | 10M | 20 | SINGLE_SCRIPT (2 unique) | MULTIPLE_SCRIPTS (9 unique) | Perfect -21/-20 win script by 4M |
+| Space Invaders | 201 | 10M | 20 | SINGLE_SCRIPT (2 unique) | MULTIPLE_SCRIPTS (7 unique) | 180-220 pts. UFO randomness insufficient |
+| **BeamRider** | **202** | **10M** | **10** | **MULTIPLE_SCRIPTS (3 unique)** | MULTIPLE_SCRIPTS (8 unique) | **First reactive argmax policy in project** |
+| Freeway | 203 | 10M | 10 | SINGLE_SCRIPT (1 unique, 0.0) | SINGLE_SCRIPT (1 unique, 0.0) | Never learned. 0pt. |
+
+### BeamRider — The Breakthrough
+
+BeamRider is the first and only environment where PPO produces a genuinely reactive argmax policy (MULTIPLE_SCRIPTS on det=True). The key difference: **hard failure constraints.** One enemy bullet or sector laser = instant death. A memorized action sequence puts the ship at a specific position at a specific time, guaranteeing collision with a sector laser or enemy bullet. There is no safe sweep pattern. The ONLY viable policy is one that looks at the screen and dodges.
+
+Contrast with soft-failure games (Breakout, Pong, Space Invaders, Freeway): mistakes degrade state but don't end the game. Scripts remain viable.
+
+### Pong — Perfect-Win Script
+
+Learned a fixed serve-return sequence that wins every game 21-0 or 21-1 by 4M steps. The deterministic AI opponent means a memorized paddle sequence beats it every time. Score diversity comes from 0-30 random no-ops at reset changing serve trajectories.
+
+### Space Invaders — Timed Firing Pattern
+
+Despite random UFO timing, the agent learned a fixed firing pattern (left-right sweep, fire at timed intervals) hitting deterministic enemy rows. Random UFOs add score variance without requiring reactive aiming.
+
+### Freeway — Never Learned
+
+0.0 score. Agent never moved the chicken upward. Degenerate local optimum: do nothing, accept 0 reward.
+
+**Conclusion:** SINGLE_SCRIPT is a general PPO property, not Breakout-specific. 4/5 games SINGLE_SCRIPT. Only BeamRider (hard failure) produces MULTIPLE_SCRIPTS. See `MULTI_ENV_ANALYSIS.md` for detailed analysis.
+
+---
+
+## Experiment 10: Life-Loss Penalty — PPO_101 (COMPLETED — NEGATIVE)
+
+**Date:** July 28, 2026
+
+**Hypothesis:** BeamRider proved hard failure constraints force reactive PPO policies. Make life loss in Breakout a hard-failure-like event: -10 per life loss. Scripts that lose balls become net-negative.
+
+**Design:** `LifeLossPenalty` wrapper reads `ale.lives()` per step, penalizes life loss. Wrapper placed AFTER ClipRewardEnv (penalty not clipped to [-1,+1]). Penalty annealed 0→10 over 5M steps. Standard PPO, SEED=101, frameskip=1.
+
+**Results at 14M (stopped):**
+
+| Milestone | det=True | det=False |
+|-----------|----------|-----------|
+| 5M | SINGLE_SCRIPT 0 pts | SINGLE_SCRIPT |
+| 8M | SINGLE_SCRIPT 2 pts | 6 unique, avg 4.0 |
+| 10M | SINGLE_SCRIPT 0 pts | 7 unique, avg 3.9 |
+| 12M | SINGLE_SCRIPT 6 pts | 12 unique, avg 9.8, best 20 |
+| 14M | SINGLE_SCRIPT 17 pts | 13 unique, avg 13.3, best 27 |
+
+All checks: SINGLE_SCRIPT. Penalty changed which script (scores climbed 0→17) but never prevented memorization. The policy learned to survive while scripting. At -10/life, a 17-pt script losing 1 life is net +7 — still locally optimal.
+
+**Conclusion:** FALSIFIED at -10 magnitude. Teaches survival, not ball-tracking. Higher magnitudes (-50, -100, game-over) untested.
+
+---
+
+## Experiment 11: Ball-Tracking Representation Supervision — PPO_102 (ACTIVE)
+
+**Date:** July 28, 2026
+
+**Hypothesis:** Instead of changing reward or environment, change the FEATURES. Jointly train a ball-position prediction head on the shared CNN features. The CNN receives gradients from both PPO (play Breakout) and ball-tracking MSE (see the ball). If ball position is baked into features, any policy using those features MUST be reactive.
+
+**Design:**
+- `BallPositionWrapper`: reads ball (x,y) from ALE RAM (addresses 99, 101) into info dict
+- `BallPositionRecorder`: VecEnv wrapper accumulating ball positions from step_wait()
+- `BallTrackingCallback`: after each PPO rollout, trains aux head: CNN(512)→Linear(64)→ReLU→Linear(2)→(ball_x, ball_y). Separate Adam (lr=1e-4), 2 epochs, batch=256.
+- Standard PPO: NatureCNN, ent_coef=0.006, SEED=102, frameskip=1
+
+**Critical Bug (fixed July 28):** `_train_aux()` silently returned every call for 12.8M steps due to:
+1. `rollout_buffer.size()` returns n_steps (128) not n_steps×n_envs (4096). `get_ball_positions(128)` returned 128 < batch_size(256) → early return.
+2. `observations` shape `(n_steps, n_envs, C, H, W)` = `(128, 32, 4, 84, 84)` not flattened for NatureCNN `(N, 4, 84, 84)` — would crash if guard passed.
+
+Both fixed at 12.8M. Prior: 0 aux training.
+
+**Results after fix (12.8M→14.5M):**
+
+| Step | aux_mse | px_err_x |
+|------|---------|----------|
+| 12.80M | 70.55 | 1344px (first ever aux train) |
+| 12.82M | 1.93 | 222px |
+| 13.00M | 0.28 | 84px |
+| 13.17M | 0.10 | 51px |
+| 14.45M | 0.008 | **14px** |
+
+MSE dropped 5000× in 1.7M aux-training steps. CNN encodes ball at ~14px. Policy: SINGLE_SCRIPT throughout. At 13.8M: 2 pts, stoch=1 unique.
+
+**Key finding:** Ball-tracking features are necessary but not sufficient for reactivity. PPO's optimizer finds a script even when features encode ball position. Stronger than PPO_85 (frozen features): aux gradient is actively reshaping CNN during training, policy still ignores features.
+
+**Status:** Still running at 14.5M/50M. Aux continues improving (14px and slowly dropping). Policy remains SINGLE_SCRIPT.
+
+---
+
+## Experiment 12: Stronger Aux Supervision from Scratch — PPO_103 (ACTIVE)
+
+**Date:** July 28, 2026
+
+**Hypothesis:** PPO_102's aux (lr=1e-4, epochs=2) plateaued at ~55px against 12.8M of frozen features, then improved to 14px post-fix. Starting from scratch with 10× stronger aux (aux_lr 1e-4→5e-4, aux_epochs 2→4) should push features to pixel precision BEFORE the policy converges to a script.
+
+**Design:** Same as PPO_102 but aux_lr=5e-4, aux_epochs=4. SEED=103, from scratch.
+
+**Results at 946K:**
+
+```
+[BallTracking] step=946,176 aux_mse=0.0104 px_err_x=16.3px
+
+entropy_loss:        -1.22
+explained_variance:  0.984
+value_loss:          0.00159
+approx_kl:           0.003
+clip_fraction:       0.0011
+ep_rew_mean:         0.45
+n_updates:           231
+```
+
+Both true simultaneously: CNN encodes ball at 16px (improving); policy fully collapsed (neg entropy, ev→1.0, 0.45-pt script).
+
+**Key finding:** PPO memorizes FASTER than aux can shape features. Policy found a script in ~200 PPO updates. At that same moment, aux precision was 16px. 10× gradient = 8× faster feature learning vs PPO_102, but still not fast enough.
+
+**Comparison:**
+
+| | PPO_102 | PPO_103 |
+|---|---------|---------|
+| Aux precision | 14px at 14.5M | 16px at 946K |
+| Aux start | 12.8M (post-bug) | 0 (from scratch) |
+| Effective aux gradient | 1× | 10× |
+| Policy | SINGLE_SCRIPT, stoch=1 | SINGLE_SCRIPT, 0.45pt |
+| PPO updates to collapse | unknown (bug masked) | ~231 |
+
+**Status:** Running at 946K/50M. 

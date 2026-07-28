@@ -19,6 +19,7 @@ Design:
   - Target:     50M steps
 """
 import os
+import numpy as np
 import glob
 import cv2
 import gymnasium as gym
