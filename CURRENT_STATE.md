@@ -1,6 +1,6 @@
 # Current State — BreakoutBot
 
-**Last updated: 2026-07-28 (Multi-env probes COMPLETE, BeamRider breakthrough, Experiments 10-12)**
+**Last updated: 2026-07-28 23:50 (PPO_107 launched, BeamRider reactivity CONFIRMED, cursor adversary design)**
 
 ---
 
@@ -10,11 +10,15 @@
 
 **Dose-response curve (July 27): Teleport magnitude changes which script gets memorized, not whether.** ±30px produces a 21pt script (best in the project for dynamics). ±35px is marginal (0-5pt). ±40px+ is dead (0pt). But every single setting produces SINGLE_SCRIPT on clean ALE. Teleports change the script quality, not the memorization outcome.
 
-**Experiment 8 (LAUNCHING): Reward the behavior directly.** If the Atari score signal is the attractor pulling PPO toward blind scripts, then we need to make ball-tracking *more rewarding than the Atari score*. Four variants: ball-hit reward at 1.0 and 2.0, descending-only proximity, and combined (hit + proximity + survival penalty). All train on clean ALE — no teleports, no noise. The goal is to shift the optimization landscape so reactive policies occupy a higher local optimum than blind scripts.
+**BeamRider CONFIRMED GENUINELY REACTIVE (July 28 evening).** The noop=0, det=True verification test was run: 100 games, zero random offset, argmax action selection. Result: 6 unique scores, MULTIPLE_SCRIPTS. A memorized script would produce ≤2. The std was 33.7 — higher than with noop noise — because the policy genuinely reacts to what happens each game. This is the **first verified reactive PPO argmax in the project's 107-run history.**
 
-After 104 experiments, no method has broken SINGLE_SCRIPT on any soft-failure game. But BeamRider — the only game with hard failure constraints — produces MULTIPLE_SCRIPTS. The thesis: **PPO always memorizes in deterministic soft-failure environments. Only hard failure constraints force reactivity.**
+**Revised thesis (July 28):** Hard failure was falsified by BEAMRIDER_MULTILIFE (soft failure, 3 lives, still MULTIPLE_SCRIPTS). The real mechanism is **adversarial entities that target the agent's position.** BeamRider enemies aim at the player's ship — a fixed action sequence puts the ship at a predictable position, enemies shoot there, scripts are non-viable regardless of how many lives you have. The mechanism is: **adversarial entity → threatens position → fixed patterns are exploitable → reactive policy required.**
 
-**July 28 findings:** Multi-env probes complete — Pong/SpaceInvaders/Freeway all SINGLE_SCRIPT, BeamRider MULTIPLE_SCRIPTS (first ever). PPO_102/103 prove the perception-policy gap is structural: aux supervision CAN bake ball-tracking features into the CNN (1344px→14px), but the policy still memorizes. PPO_103 shows PPO collapses to a script in ~200 updates — faster than aux can shape features, even at 10× gradient strength. Life-loss penalty (PPO_101) teaches survival, not reactivity. See `FINDINGS_2026_07_28.md` for full writeup.
+**Experiment 16 (PPO_107, ACTIVE): Port the mechanism to Breakout.** A visible cursor with its own state machine approaches the ball when the paddle isn't tracking, warns before attacking (visible pulsing), and pushes the ball away on attack. Tracking paddle → cursor retreats and hides. Cursor is only visible during THREATENING/ATTACK — in eval (standard Breakout), no cursor appears because tracking keeps it hidden. Calibration gap: perfect=14.0 vs best script=1.9 (gap=12.1). At 4M: SINGLE_SCRIPT but 20pt script — already the best adversarial-trained script (PPO_105: 13pt, PPO_106: 12pt).
+
+**Direction flip test (July 28):** RAM[105] direction control tested. Dodge mode over-penalizes tracking (14→5), flip mode accidentally helps tracking (14→26). Direction-based adversarial has same fundamental limitation as position-based — doesn't solve the deterministic-function problem.
+
+**July 28 earlier:** Multi-env probes complete. PPO_102/103 prove perception-policy gap is structural. Life-loss penalty (PPO_101) teaches survival, not reactivity. Adversarial push wrappers (PPO_105, PPO_106 v1/v2/v3) all SINGLE_SCRIPT — deterministic wrappers preserve memorizability. See `FINDINGS_2026_07_28.md` for full writeup.
 
 ---
 
@@ -62,6 +66,12 @@ After 104 experiments, no method has broken SINGLE_SCRIPT on any soft-failure ga
 | **Ball-tracking features do NOT prevent policy memorization** | PPO_102 at 14.5M: 14px aux precision, SINGLE_SCRIPT (stoch=1 unique). PPO_103 at 946K: 16px, SINGLE_SCRIPT. Features encode ball position but policy ignores them. |
 | **The perception-policy gap is structural** | PPO_103: policy collapses to script in ~200 PPO updates — faster than aux can shape features to pixel precision, even at 10× gradient strength. Not a gradient-strength problem. |
 | **Life-loss penalty (-10/life) does not prevent memorization** | PPO_101: SINGLE_SCRIPT through 14M. Scores climbed 0→17. Teaches survival, not ball-tracking. Penalty too small relative to script score. |
+| **BeamRider is MULTIPLE_SCRIPTS from the very first checkpoint (1M)** | BEAMRIDER_BASELINE tracked at 1M intervals through 10M. Never SINGLE_SCRIPT. Reactive from training start. |
+| **BeamRider stays MULTIPLE_SCRIPTS WITHOUT hard failure** | BEAMRIDER_MULTILIFE (no EpisodicLifeEnv, 3 lives/sector): MULTIPLE_SCRIPTS at 1M, 2M, 3M. Getting MORE diverse (6→6→8 unique). Hard failure not required. |
+| **Adversarial threat, not hard failure, is the mechanism that forces reactivity** | BeamRider enemies aim at the player's position. Fixed movement patterns are predictable → enemies shoot where you'll be. This is true with 1 life or 3. The environment actively punishes fixed patterns. Hard failure is neither necessary nor sufficient. |
+| **BeamRider reactivity is GENUINE — verified by noop=0, det=True test** | 100 games, noop_max=0, deterministic=True: 6 unique scores, MULTIPLE_SCRIPTS, std=33.7. First verified reactive PPO argmax in project history. A memorized script would produce ≤2 unique. Score diversity survives with zero noop offset — policy genuinely reacts to game state. |
+| **Direction-based adversarial (RAM[105]) does not solve the deterministic-function problem** | Dodge mode over-penalizes tracking (14→5), flip mode accidentally helps tracking (14→26). Same fundamental limitation as position-based push: any deterministic f(ball_x, paddle_x) can be optimized by a fixed sequence. |
+| **Visible cursor adversary creates 12.1pt calibration gap** | Perfect tracking=14.0, best script=1.9. Cursor has agency (state machine), visibility (pulsing before attack), and retreat (tracking keeps it hidden). Strongest adversarial calibration in the project. |
 
 ### TENTATIVE — Plausible but not confirmed
 
@@ -83,6 +93,8 @@ After 104 experiments, no method has broken SINGLE_SCRIPT on any soft-failure ga
 | **"Life-loss penalties force reactive ball-tracking"** | PPO_101: -10/life, SINGLE_SCRIPT through 14M. Teaches survival while scripting. |
 | **"Ball-tracking features → reactive policy by construction"** | PPO_102/103: features encode ball position (14-16px), policy is SINGLE_SCRIPT. Features necessary but not sufficient. |
 | **"Stronger aux gradient → pixel-precision features → reactivity"** | PPO_103: 10× gradient, features improving (16px at 946K), but policy collapses to script in ~200 updates. PPO memorizes faster than aux can shape features. |
+| **"Hard failure (one hit = death) is the mechanism that forces reactivity in BeamRider"** | BEAMRIDER_MULTILIFE (no EpisodicLifeEnv, soft failure): MULTIPLE_SCRIPTS at 1M/2M/3M. Removing hard failure did NOT produce SINGLE_SCRIPT. The real mechanism is adversarial threat — enemies that aim at the player's position punish fixed movement patterns. Hard failure is neither necessary nor sufficient. |
+| **"One-life Breakout will force reactivity"** (TENTATIVE) | PPO_104 at 1M: SINGLE_SCRIPT (1 unique, 3.0 avg). Scripts score 3 points on one ball — worse than 5-life scripts but still a viable local optimum. One life doesn't change the fundamental dynamic: the ball follows physics and can't exploit fixed paddle patterns. |
 
 ---
 
@@ -173,13 +185,24 @@ Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_
 
 **BeamRider analysis:** Hard failure (one bullet = death) forces reactivity. There is no safe sweep. Scripts are non-viable. This is the unifying principle across 104 experiments.
 
+### BeamRider Paired Experiment — Hard vs Soft Failure (COMPLETED/RUNNING July 28)
+
+To isolate whether hard failure or adversarial threat is the mechanism behind BeamRider's reactivity.
+
+| Model | Seed | EpisodicLifeEnv | Failure | Progress | det=True Result |
+|-------|------|-----------------|---------|----------|-----------------|
+| BEAMRIDER_BASELINE | 206 | YES | Hard (1 life/sector) | 10M COMPLETE | MULTIPLE_SCRIPTS all checkpoints 1M→10M |
+| BEAMRIDER_MULTILIFE | 205 | NO | Soft (3 lives/sector) | 3M RUNNING | MULTIPLE_SCRIPTS 1M→3M (getting more diverse) |
+
+**Finding: Hard failure is NOT the mechanism.** Both variants are MULTIPLE_SCRIPTS. Removing EpisodicLifeEnv did not produce SINGLE_SCRIPT. The real mechanism is adversarial threat: BeamRider enemies aim at the player's position. A fixed pattern is predictable → enemies shoot where you'll be → scripts are non-viable regardless of how many lives you have.
+
 ### Experiment 10: Life-Loss Penalty — PPO_101 (COMPLETED — Negative)
 
 | Model | Config | Step | det=True | Notes |
 |-------|--------|------|----------|-------|
 | PPO_101 | -10/life, annealed 5M, SEED=101 | 14M (stopped) | SINGLE_SCRIPT all checks | Scores climbed 0→17. Teaches survival, not reactivity. |
 
-### Experiment 11: Ball-Tracking Representation Supervision — PPO_102 (ACTIVE)
+### Experiment 11: Ball-Tracking Representation Supervision — PPO_102 (COMPLETED — Science Done)
 
 | Model | Config | Step | det=True | Notes |
 |-------|--------|------|----------|-------|
@@ -187,11 +210,51 @@ Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_
 
 **Critical infrastructure bug:** `_train_aux()` silently returned every call for 12.8M steps due to buffer-size mismatch (`rollout_buffer.size()` returns 128 not 4096) and unflattened observation shape. Both fixed. Bug analysis in `FINDINGS_2026_07_28.md`.
 
-### Experiment 12: Stronger Aux from Scratch — PPO_103 (ACTIVE)
+### Experiment 12: Stronger Aux from Scratch — PPO_103 (COMPLETED — Science Done)
 
 | Model | Config | Step | det=True | Notes |
 |-------|--------|------|----------|-------|
 | PPO_103 | aux_lr=5e-4, epochs=4, SEED=103 | 946K | SINGLE_SCRIPT (0.45pt, 231 updates) | 16px aux. Policy collapsed FASTER than aux could shape features. 10× gradient vs PPO_102. |
+
+### Experiment 13: One-Life Breakout (Hard Failure) — PPO_104 (ACTIVE)
+
+| Model | Config | Step | det=True | Notes |
+|-------|--------|------|----------|-------|
+| PPO_104 | OneLifeWrapper, frameskip=1, SEED=104 | 1M | SINGLE_SCRIPT (3.0 avg, 1 unique) | Scripts score 3pts on one ball. Worse than 5-life scripts but still a viable local optimum. Hard failure alone insufficient for Breakout. |
+
+### Experiment 14: Adversarial Breakout — PPO_105 (COMPLETED — SINGLE_SCRIPT)
+
+| Model | Config | Step | det=True | Notes |
+|-------|--------|------|----------|-------|
+| PPO_105 | AdversarialBallWrapper (strength=2.5, zone=140), SEED=105 | 10M | SINGLE_SCRIPT 3-13pt | Constant push insufficient. SINGLE_SCRIPT at every checkpoint. |
+
+**Design:** Ball heading downward + below paddle zone → horizontal push away from paddle. Paddle tracks ball → push≈0, normal physics. Paddle doesn't track → ball dodges, no hits. Scripts are directly punished. Eval/check uses standard Breakout (no adversarial wrapper) to test transfer.
+
+**Why it failed:** Deterministic wrappers preserve memorizability. Push = f(ball_x, paddle_x), both determined by action sequence. Fixed actions → fixed push trajectory → fixed score. PPO finds scripts that minimize expected push.
+
+### Experiment 15: Adversarial Breakout (Proportional) — PPO_106 v1/v2/v3 (COMPLETED — SINGLE_SCRIPT)
+
+| Version | Config | Step | det=True | Notes |
+|---------|--------|------|----------|-------|
+| v1 | fs=1, constant push ±2.5 | 6M | 0pt dead | fs=1 amplifies push 4× |
+| v2 | fs=1, proportional, max_push=15→4 | 3M | 0pt dead | Unplayable at fs=1 |
+| v3 | fs=4, proportional, max_push=3 | 9M+ | SINGLE_SCRIPT 0-12pt | Same pattern as PPO_105 |
+
+**Design:** Proportional push with dead zone: push = sign(error) × min((|error| − dead_zone) × gain, max_push). Creates learnable gradient — track better → less push → more reward. Calibration: perfect=12, scripts=0-1 at max_push=3.
+
+**Why it failed:** Same fundamental issue — deterministic function of instantaneous state. PPO finds action sequences that are more sophisticated than calibration strategies. Learned scripts keep paddle close enough to ball to minimize push.
+
+### Experiment 16: Adversarial Cursor (Visible Agent) — PPO_107 (ACTIVE)
+
+| Model | Config | Step | det=True | Notes |
+|-------|--------|------|----------|-------|
+| PPO_107 | AdversarialCursorWrapper (approach=2, threat=8, warn=5f, push=4, cooldown=60f), SEED=107 | 4M / 50M | SINGLE_SCRIPT 20pt | det=False: 8 unique, avg 17.9. Best adversarial script yet (PPO_105: 13pt, PPO_106: 12pt). |
+
+**Design:** Visible cursor with state machine — the first "secondary agent" in BreakoutBot. Cursor approaches ball when paddle isn't tracking, pulses as warning (5 frames), attacks by pushing ball away. Paddle tracks → cursor retreats and hides. Cursor only visible during THREATENING/ATTACK states — in eval (standard Breakout), no cursor appears. Calibration gap: 12.1 (strongest in project).
+
+**Key innovation:** VISIBLE ENTITY WITH AGENCY. Not a deterministic function of instantaneous state — the cursor has memory (state machine), movement (approaches/retreats at finite speed), and visibility (appears before acting). This mirrors BeamRider's structure: visible enemy → threat → react → survive.
+
+**At 4M:** SINGLE_SCRIPT but the script scores 20pts on clean eval — 54% higher than PPO_105 (13pt) and 67% higher than PPO_106 (12pt). det=False maintains diversity (8 unique). Pattern is recognizable: argmax-script + policy-entropy, same as PPO_105/106. Early days.
 
 ---
 
@@ -247,66 +310,42 @@ Training: 32 envs, NatureCNN, no sticky, LR 2.5e-4→1e-5, clip 0.2→0.05, ent_
 
 8. **Sparse-reward games may never escape the zero-score attractor.** Freeway: 0pt, never learned to move the chicken. The no-op local optimum dominates.
 
-### Experiment 10: Life-Loss Penalty (July 28, 2026)
+### Experiment 15: Adversarial Breakout (July 28, 2026)
 
-9. **Life-loss penalty at -10 teaches survival, not ball-tracking.** The policy learned to survive while executing a script. The penalty magnitude was too small — BeamRider's "one bullet = death" is effectively infinite penalty, not -10.
+16. **Constant push at fs=4 (PPO_105) degrades scripts but doesn't prevent them.** SINGLE_SCRIPT 3-13pt at every checkpoint 1M→10M. Effective push of 0.625 px/frame is too subtle.
 
-### Experiments 11-12: Representation Supervision (July 28, 2026)
+17. **Proportional push at fs=4, max_push=3 (PPO_106 v3) also SINGLE_SCRIPT.** SINGLE_SCRIPT 0-12pt at every checkpoint 1M→9M. PPO finds action sequences that work around the push — learned scripts are more sophisticated than calibration strategies.
 
-10. **Aux supervision CAN bake ball-position features into the CNN during PPO training.** After fixing the callback bug, PPO_102's features dropped from 1344px to 14px error in 1.7M aux-training steps. The gradient flows correctly.
+18. **frameskip=1 is structurally incompatible with per-frame push.** Any push applied every ALE frame is amplified 4× vs fs=4. Even 1px/frame push kills perfect tracking. Both v1 (constant) and v2 (proportional) died at 0pt.
 
-11. **Ball-tracking features do not prevent policy memorization.** PPO_102 at 14.5M: 14px precision, SINGLE_SCRIPT (stoch=1 unique). PPO_103 at 946K: 16px, SINGLE_SCRIPT. The policy ignores task-relevant features when a simpler solution (sweep script) exists.
+19. **Calibration framework works for param selection but underestimates PPO.** Simple strategies (sweep, center-hold, edge-camp) score 0-1 with adversarial push. But PPO finds optimized scripts that calibration doesn't cover.
 
-12. **PPO memorizes faster than aux can shape features.** PPO_103: policy collapsed to script in ~200 PPO updates. At the same moment, aux precision was only 16px. Even 10× aux gradient can't push features to pixel precision before memorization sets in.
+20. **Deterministic wrappers preserve memorizability.** Push is f(ball_x, paddle_x), both determined by action sequence. Fixed actions → fixed push trajectory → fixed score. Any deterministic environment modification can be memorized.
 
-13. **The perception-policy gap is a structural property of the optimization landscape, not a gradient-strength problem.** The timescale mismatch is fundamental: PPO finds the memorization attractor in ~200 updates; precise feature learning takes thousands.
+21. **setRAM teleportation looks unnatural.** Modifying ball position changes position but not velocity. Ball snaps to new location, natural velocity carries it back → zig-zag. Ball moves 1px/frame naturally; 3px push is 3× natural speed.
 
-### The Central Thesis (July 28, 2026)
+22. **Direction control (RAM[105]) is the next avenue.** Modifying ball direction instead of position produces natural curves. Initial "dodge" test (force direction away from paddle) over-penalizes tracking — needs tuning. Unclear if stochastic/visible threat is required.
 
-14. **In deterministic environments, PPO's argmax always collapses to a deterministic action sequence unless the environment kills the agent for executing one.** This unifies all 104 experiments. Every failed intervention (reward shaping, dynamics randomization, entropy tuning, feature supervision) shares the same root cause: scripts remain a viable local optimum in soft-failure environments. Only BeamRider's hard failure breaks the pattern.
+### Open Design Questions (Pending)
 
----
-
-## What's Next
+- **Visible vs invisible threat:** Would making the adversarial push visible in the observation help PPO learn to track?
+- **Stochastic vs deterministic:** Would adding noise (probability of push, magnitude jitter) break the memorization attractor?
+- **Ball speed modification:** Can we find and modify the ball speed RAM address? Only probed level 1 — speed-up in later levels untested.
 
 ### Running Now (July 28)
 
 | Run | Config | Progress | Status |
 |------|--------|----------|--------|
-| PPO_102 | Exp 11: aux_lr=1e-4, epochs=2 | 14.5M / 50M | Features at 14px, policy SINGLE_SCRIPT |
-| PPO_103 | Exp 12: aux_lr=5e-4, epochs=4 | 946K / 50M | Features at 16px, collapsed at 231 updates |
+| PPO_107 | Exp 16 — Adversarial Cursor (visible agent) | ~4M / 50M | SINGLE_SCRIPT det=True, 20pt script, det=False diverse (8 unique) |
 
-### Recently Stopped / Completed
+### Recently Completed
 
 | Run | Result |
 |-----|--------|
-| PPO_97 | 24M — 50% Y-perturb: SINGLE_SCRIPT |
-| PPO_100 | 28M — 50% Y-perturb + hit_only: SINGLE_SCRIPT |
-| PPO_101 | 14M — Life-loss penalty: SINGLE_SCRIPT |
-| PPO_92-95, 98 | Experiment 8 — all SINGLE_SCRIPT |
-| Pong probe | 10M — SINGLE_SCRIPT (perfect-win script) |
-| Space Invaders probe | 10M — SINGLE_SCRIPT |
-| **BeamRider probe** | **10M — MULTIPLE_SCRIPTS** |
-| Freeway probe | 10M — SINGLE_SCRIPT (0pt) |
-
-### Paths Forward
-
-1. **Publish.** Coherent thesis: PPO always memorizes in soft-failure games. BeamRider counterexample. Perception-policy gap structural. Enough for a paper.
-
-2. **Make Breakout hard-failure.** Game-over on first life loss. Apply BeamRider mechanism directly.
-
-3. **Force action diversity.** Penalize consecutive identical actions. Attack scripts at output level.
-
-4. **Multi-game hard-failure map.** Test Riverraid, Q*bert, Seaquest. Confirm hypothesis generalizes.
-
-5. **Different algorithm.** SAC, TD3 — methods without PPO's argmax-seeking optimizer.
-
-### For New Sessions
-
-See `CURRENT_STATE.md` (this file) first — then:
-1. `FINDINGS_2026_07_28.md` — latest results: multi-env, BeamRider, Experiments 10-12
-2. `EXPERIMENTS.md` — full experiment history
-3. `CLAUDE.md` — critical rules, conventions
-4. `FLAWS.md` — methodological flaw catalog
-5. `LOGICAL_AUDIT.md` — reasoning pitfall catalog
-6. `MULTI_ENV_ANALYSIS.md` — BeamRider breakthrough analysis
+| PPO_104 | Exp 13 — COMPLETED: SINGLE_SCRIPT 1-3pt. One-life doesn't force reactivity. |
+| PPO_105 | Exp 14 — COMPLETED: SINGLE_SCRIPT 3-13pt. Constant push insufficient. |
+| PPO_106 v1 | Exp 15a — KILLED: 0pt dead. fs=1 constant push → error amplification. |
+| PPO_106 v2 | Exp 15b — KILLED: 0pt dead. fs=1 proportional push → unplayable. |
+| PPO_106 v3 | Exp 15c — COMPLETED: SINGLE_SCRIPT 0-12pt. Scripts adapt to proportional push. |
+| BEAMRIDER_BASELINE | Paired experiment — COMPLETED: MULTIPLE_SCRIPTS 1M→10M, all tracked |
+| BEAMRIDER_MULTILIFE | Soft failure — COMPLETED: MULTIPLE_SCRIPTS 1M→10M. Hard failure FALSIFIED. |

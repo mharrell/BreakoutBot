@@ -1436,11 +1436,11 @@ MSE dropped 5000× in 1.7M aux-training steps. CNN encodes ball at ~14px. Policy
 
 **Key finding:** Ball-tracking features are necessary but not sufficient for reactivity. PPO's optimizer finds a script even when features encode ball position. Stronger than PPO_85 (frozen features): aux gradient is actively reshaping CNN during training, policy still ignores features.
 
-**Status:** Still running at 14.5M/50M. Aux continues improving (14px and slowly dropping). Policy remains SINGLE_SCRIPT.
+**Status:** COMPLETED. Science done. Features encode ball at 14px; policy SINGLE_SCRIPT. Killed July 28.
 
 ---
 
-## Experiment 12: Stronger Aux Supervision from Scratch — PPO_103 (ACTIVE)
+## Experiment 12: Stronger Aux Supervision from Scratch — PPO_103 (COMPLETED)
 
 **Date:** July 28, 2026
 
@@ -1476,4 +1476,191 @@ Both true simultaneously: CNN encodes ball at 16px (improving); policy fully col
 | Policy | SINGLE_SCRIPT, stoch=1 | SINGLE_SCRIPT, 0.45pt |
 | PPO updates to collapse | unknown (bug masked) | ~231 |
 
-**Status:** Running at 946K/50M. 
+**Status:** COMPLETED. Science done. Policy collapsed to script in ~200 PPO updates — faster than aux can shape features. Killed July 28.
+
+---
+
+## Experiment 13: One-Life Breakout (Hard Failure) — PPO_104 (ACTIVE)
+
+**Date:** July 28, 2026
+
+**Hypothesis:** Apply BeamRider's hard failure mechanism directly to Breakout. One ball = game over. Scripts that can't survive on one ball become non-viable.
+
+**Design:**
+- `OneLifeWrapper`: replaces EpisodicLifeEnv, terminates on first `ale.lives()` decrement
+- Training: ALE/Breakout-v5, frameskip=1, one life only
+- Eval/Check: Standard 5-life Breakout
+- Standard PPO: NatureCNN, ent_coef=0.006, SEED=104, 50M target
+
+**Results at 1M:**
+| det=True | det=False |
+|----------|-----------|
+| SINGLE_SCRIPT (1 unique, 3.0 avg) | MULTIPLE_SCRIPTS (4 unique, 4.0 avg) |
+
+**Analysis:** Scripts score 3 points on one ball — worse than 5-life scripts (60pt) but still a viable local optimum. One-life Breakout is still soft-failure from the ball's perspective: the ball follows deterministic physics and can't exploit fixed patterns. Hard failure alone doesn't make Breakout adversarial.
+
+**Status:** Running at 1M/50M.
+
+---
+
+## Experiment 14: Adversarial Breakout — PPO_105 (ACTIVE — launched July 28)
+
+**Date:** July 28, 2026
+
+**Hypothesis:** BeamRider's mechanism is NOT hard failure (FALSIFIED by BEAMRIDER_MULTILIFE) but **adversarial threat** — enemies that aim at your position punish fixed movement patterns. Port this to Breakout: make the ball actively dodge a paddle that isn't tracking it.
+
+**Design:**
+- `AdversarialBallWrapper`: reads ball (x=RAM99, y=RAM101) and paddle (x=RAM72) each step
+  - When ball heading downward AND ball_y > 140 (paddle zone):
+    - `error = ball_x - paddle_x`
+    - `push = sign(error) × 2.5 px`
+    - Write new ball_x via `ale.setRAM(99)`
+    - Clamp to screen bounds [8, 152]
+  - Paddle at ball: push≈0. Paddle not tracking: ball dodges away.
+- Training: Adversarial + EpisodicLifeEnv (5 lives), frameskip=4
+- Eval/Check: **Standard Breakout (no adversarial wrapper)** — tests TRANSFER of tracking skills
+- Strength: 2.5 px/step (0.625 px/frame effective at frameskip=4)
+- No annealing — constant adversarial force
+- Standard PPO: NatureCNN, ent_coef=0.006, SEED=105, 50M target
+
+**Key design insight:** The adversarial wrapper punishes scripts directly. A fixed sweep pattern keeps the paddle at predictable positions → ball dodges away → no paddle-ball contact → no brick breaks → no reward. The only way to score is to track the ball. If PPO_105 goes MULTIPLE_SCRIPTS, adversarial threat is the confirmed, portable mechanism.
+
+**Comparison to BeamRider:**
+| Dimension | BeamRider (natural) | Breakout + Adversarial |
+|-----------|---------------------|----------------------|
+| Adversarial entity | Enemies (aim at player) | Ball (dodges paddle) |
+| Failure mode | Death (hard) | Miss ball (soft, lose points) |
+| Lives | 1 or 3 | 5 |
+| Lanes | 5 discrete | 140 continuous |
+| Threat density | Multiple sources, multiple Y positions | Single ball |
+
+If this works despite the differences, adversarial threat is the unifying mechanism.
+
+**Status:** Just launched. First memorization check at 1M.
+
+---
+
+## BeamRider Paired Experiment (July 28, 2026)
+
+**Purpose:** Isolate whether hard failure or adversarial threat causes BeamRider's MULTIPLE_SCRIPTS.
+
+**Design:**
+| Variant | Seed | EpisodicLifeEnv | Failure Mode | Predicted | Actual |
+|---------|------|-----------------|--------------|-----------|--------|
+| BEAMRIDER_BASELINE | 206 | YES | Hard (1 life/sector) | MULTIPLE_SCRIPTS | MULTIPLE_SCRIPTS ✓ |
+| BEAMRIDER_MULTILIFE | 205 | NO | Soft (3 lives/sector) | SINGLE_SCRIPT | MULTIPLE_SCRIPTS ✗ |
+
+### BEAMRIDER_BASELINE (Hard Failure, Tracked at 1M intervals)
+
+Full 10M run with memorization checks every 1M steps:
+
+| Step | det=True Verdict | Unique | Avg | Best |
+|------|-----------------|--------|-----|------|
+| 1M | MULTIPLE_SCRIPTS | 10 | 15.4 | 25 |
+| 3M | MULTIPLE_SCRIPTS | 8 | 19.6 | — |
+| 5M | MULTIPLE_SCRIPTS | 12 | 45.9 | 76 |
+| 7M | MULTIPLE_SCRIPTS | 12 | 75.2 | 97 |
+| 9M | MULTIPLE_SCRIPTS | 11 | 88.0 | 117 |
+| 10M | MULTIPLE_SCRIPTS | 11 | 86.3 | 107 |
+
+**Reactive from 1M onward.** No SINGLE_SCRIPT phase. Scores climb steadily.
+
+### BEAMRIDER_MULTILIFE (Soft Failure)
+
+Training WITHOUT EpisodicLifeEnv (3 lives per sector, episode continues after death). Check/eval use standard EpisodicLifeEnv.
+
+| Step | det=True Verdict | Unique | Avg |
+|------|-----------------|--------|-----|
+| 1M | MULTIPLE_SCRIPTS | 6 | 13.0 |
+| 2M | MULTIPLE_SCRIPTS | 6 | 18.3 |
+| 3M | MULTIPLE_SCRIPTS | 8 | 46.9 |
+
+**Still MULTIPLE_SCRIPTS, getting MORE diverse.** Removing hard failure did NOT produce SINGLE_SCRIPT.
+
+### Conclusion
+
+**Hard failure is FALSIFIED as the mechanism.** The original thesis ("PPO always memorizes unless the environment kills the agent for executing a script") is wrong. BEAMRIDER_MULTILIFE proves that even with 3 lives and no episode termination, BeamRider forces reactivity.
+
+**Adversarial threat is the real mechanism.** BeamRider enemies aim at the player's position. A fixed movement pattern is predictable → enemies shoot where you'll be → scripts are non-viable with 1 life or 3. The environment actively punishes fixed patterns. Breakout lacks this: the ball follows physics, doesn't care where the paddle is.
+
+**Revised thesis:** PPO always memorizes in deterministic non-adversarial environments. Adversarial threat (entities that target the agent's position) forces reactivity. Hard failure is neither necessary nor sufficient.
+
+**Follow-up:** PPO_105 and PPO_106 test whether this mechanism is portable to Breakout.
+
+---
+
+## Experiment 15: Adversarial Breakout (July 28, 2026)
+
+**Goal:** Port BeamRider's adversarial threat mechanism to Breakout. Make the ball "dodge" a lazy paddle — if the paddle isn't tracking, the ball steers away. If adversarial threat is the mechanism, MULTIPLE_SCRIPTS should emerge.
+
+**Approach:** `AdversarialBallWrapper` reads ball (x,y) and paddle (x) from ALE RAM each step. When the ball is heading down and below a paddle-zone threshold, applies a horizontal push proportional to tracking error.
+
+### PPO_105: Constant Push, Frameskip 4 (10M)
+
+Training: `±2.5px` constant push via setRAM on ball_x. Eval/check: standard Breakout.
+
+**Result: SINGLE_SCRIPT at every checkpoint (1M→10M), scores 3-13pt.** The constant push degrades script quality (vs 60pt PPO_26) but doesn't prevent memorization. Effective push of 0.625 px/frame is too subtle.
+
+### PPO_106 v1: Constant Push, Frameskip 1 (KILLED at 6M)
+
+Training: `±2.5px` constant push every ALE frame. Eval/check: standard Breakout at fs=4.
+
+**Result: 0pt dead by 6M.** Audit finding: at fs=1, constant push creates error amplification death spiral. 1px tracking error → 2.5px push → 3.5px error → more push → ball untrackable within 10 frames.
+
+### PPO_106 v2: Proportional Push, Frameskip 1 (KILLED at 3M)
+
+Training: proportional push `push = 0.5 × (|error| − 4)`, capped at 15px (later 4px). Eval/check: standard Breakout.
+
+**Result: 0pt dead by 3M.** Proportional push fixed the math but fs=1 still amplifies push 4× vs fs=4. Calibration showed even perfect tracking scores 2.0 at max_push=4 — the environment is unplayable regardless of push design.
+
+### AdversarialBallWrapper Calibration
+
+Before v3, a systematic calibration measured strategy performance across fs/push combos:
+
+**fs=1 diagnostics (perfect tracking scores):**
+| Config | Score |
+|--------|-------|
+| fs=1, no push (baseline) | 10.0 |
+| fs=1, max_push=0.5 | 15.0 |
+| fs=1, max_push=1 | 4.0 |
+| fs=1, max_push=2 | 6.0 |
+| fs=1, max_push=4 | 2.0 |
+
+**fs=4 calibration (strategies × max_push):**
+| max_push | Perfect Track | Sweep40 | Sweep80 | Center |
+|----------|--------------|---------|---------|--------|
+| 0 (none) | 14 | 0 | 2 | 0 |
+| 2 | 14 | 0 | 0 | 0 |
+| **3** | **12** | **0** | **0** | **1** |
+| 4 | 6 | 0 | 0 | 2 |
+| 6 | 3 | 0 | 0 | 2 |
+
+max_push=3 at fs=4 chosen: perfect tracking scores 12 (86% baseline), simple scripts 0-1.
+
+### PPO_106 v3: Proportional Push, Frameskip 4 (COMPLETED at 9M+)
+
+Training: fs=4, proportional push `dead_zone=4, gain=0.5, max_push=3`. Eval/check: standard Breakout.
+
+**Result: SINGLE_SCRIPT at every checkpoint (1M→9M), scores 0-12pt.** Same pattern as PPO_105. PPO finds action sequences that work around the proportional push — learned scripts are more sophisticated than our sweep/center calibration strategies.
+
+### Key Findings
+
+1. **Calibration underestimates PPO.** Simple strategies (sweep, center-hold) score 0-1, but PPO finds optimized scripts that calibration doesn't cover.
+
+2. **Deterministic wrappers preserve memorizability.** Push is f(ball_x, paddle_x) — both determined by action sequence. Fixed actions → fixed push trajectory → fixed score.
+
+3. **setRAM teleports, doesn't curve.** Modifying position but not velocity creates zig-zag artifacts. Ball moves 1px/frame naturally; 3px push is 3× natural speed.
+
+4. **Direction control (RAM[105]) untested in training.** Modifying ball direction instead of position produces natural curves. Initial "dodge" test over-penalizes tracking but concept is unexplored.
+
+5. **fs=1 is fundamentally incompatible with per-frame interventions.** Any push applied every ALE frame is amplified 4× vs fs=4.
+
+### Open Questions
+
+- Would making the threat **visible** (e.g., ball tint when pushed) help PPO learn the tracking-reward relationship?
+- Would **stochastic** push (probability + magnitude jitter) break memorization where deterministic push couldn't?
+- Can ball **speed** be modified via RAM? Only probed level 1 (constant 1px/frame).
+
+### Scripts Created
+
+`adversarial_ball_wrapper.py`, `calibrate_adv_wrapper.py`, `diag_env_playability.py`, `probe_ball_physics.py`, `probe_ball_speed2.py`, `test_direction_flip.py`, `watch_ppo_106.py`
