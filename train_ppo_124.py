@@ -1,32 +1,36 @@
 """
-PPO_102 — Experiment 11: Ball-Tracking Representation Supervision
+PPO_124 -- Experiment 31: Paddle-Ball Proximity Reward
 
-BeamRider proved that hard failure constraints force reactive policies. But
-Breakout's soft failure mode means PPO can always find a degenerate script.
+Every approach so far tried to force reactivity INDIRECTLY. PPO_124 does
+the simplest possible thing: directly reward keeping the paddle near the
+ball horizontally.
 
-Instead of changing the reward or environment, this experiment changes the
-FEATURES THEMSELVES. A ball-position prediction head is jointly trained
-with PPO on the shared CNN features. The CNN receives gradients from both:
-  1. PPO policy/value loss — learn to play Breakout
-  2. Ball-position MSE loss  — learn to see the ball
+  bonus = 0.05 * max(0, 1 - |paddle_x - ball_x| / 80)
 
-If ball position is baked into the features, any policy that uses those
-features MUST be reactive. PPO can't "choose" to ignore the ball when the
-features literally encode ball (x, y).
+When the ball is descending (ball_y > 100), the paddle should be under it.
+Close proximity → up to +0.05/step (~25-50/game). Far away → zero bonus.
 
-Unlike PPO_85 (frozen pre-trained features → collapse), the aux gradient
-stays alive DURING policy learning, preventing the features from drifting
-into a representation that supports blind scripts.
+A center-hold script earns SOME proximity bonus (ball passes near center
+sometimes), but a reactive tracking policy gets the MAXIMUM bonus every
+descending step. The gradient explicitly rewards ball-tracking behavior.
+
+This is fundamentally different from aux losses (which train features but
+don't change policy gradients) and entropy bonuses (which reward diversity
+without specifying what to diversify on). Proximity reward directly says:
+"be near the ball = good."
+
+Key test: eval on CLEAN Breakout (no proximity reward). If the policy
+learned to track the ball to maximize the bonus, the tracking behavior
+should persist even without the bonus — the policy doesn't know the
+reward function changed.
 
 Design:
-  - BallPositionWrapper reads ball (x,y) from RAM into info dict
-  - BallPositionRecorder accumulates ball positions from VecEnv steps
-  - BallTrackingCallback trains aux head after each PPO rollout
-  - Aux head: CNN features (512) -> Linear(64) -> ReLU -> Linear(2) -> (x,y)
-  - Separate Adam optimizer for CNN + aux head (lr=1e-4)
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv (5 lives)
+              + ProximityRewardWrapper(scale=0.05, max_distance=80)
+  - Eval/Check: Standard Breakout (NO proximity reward) -- transfer test
+  - FROM SCRATCH (seed=124)
+  - Target: 25M steps
   - Standard PPO: NatureCNN, ent_coef=0.006
-  - Eval/Check: Clean ALE (no aux supervision, standard wrappers)
-  - Target: 50M steps
 """
 import os
 import numpy as np
@@ -40,22 +44,23 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
-from ball_position_wrapper import BallPositionWrapper
-from ball_tracking_callback import BallTrackingCallback, BallPositionRecorder
 from run_label_callback import RunLabelCallback
+from proximity_reward_wrapper import ProximityRewardWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_102"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_124"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-AUX_LR = 1e-4
-AUX_BATCH = 256
-AUX_EPOCHS = 2
 ENT_COEF = 0.006
-SEED = 102
+SEED = 124
+
+# Proximity reward: bonus for keeping paddle near ball during descent
+PROXIMITY_SCALE = 0.05
+PROXIMITY_MAX_DIST = 80.0
+PROXIMITY_DESCEND_THRESHOLD = 100  # ball_y > 100 = descending toward paddle
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -88,19 +93,24 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    # BallPositionWrapper BEFORE wrappers that modify obs (reads RAM directly)
-    env = BallPositionWrapper(env)
+    """Breakout + proximity reward."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
+    # Proximity reward AFTER ClipRewardEnv so the unclipped bonus flows through
+    env = ProximityRewardWrapper(
+        env, scale=PROXIMITY_SCALE, max_distance=PROXIMITY_MAX_DIST,
+        descend_threshold=PROXIMITY_DESCEND_THRESHOLD,
+    )
     env = Monitor(env)
     return env
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT proximity reward -- transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -113,6 +123,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT proximity reward -- memcheck on standard physics."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -127,57 +138,46 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 11: Ball-Tracking Representation Supervision")
-    print(f"  Aux LR: {AUX_LR} | Batch: {AUX_BATCH} | Epochs: {AUX_EPOCHS}")
-    print(f"  Training: Clean ALE + ball-position aux supervision on CNN features")
-    print(f"  Eval/Check: Clean ALE (no aux supervision)")
-    print(f"  Hypothesis: ball position in features -> reactive policy by construction")
+    print(f"{RUN_NAME} -- Experiment 31: Paddle-Ball Proximity Reward")
+    print(f"  Scale: {PROXIMITY_SCALE}, Max distance: {PROXIMITY_MAX_DIST}")
+    print(f"  Descend threshold: ball_y > {PROXIMITY_DESCEND_THRESHOLD}")
+    print(f"  Formula: bonus = {PROXIMITY_SCALE} * max(0, 1 - |paddle-ball|/{PROXIMITY_MAX_DIST})")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv + ProximityReward")
+    print(f"  Eval/Check: Standard Breakout (NO proximity reward) -- transfer test")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Entropy coef: {ENT_COEF}")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
-    # Wrap AFTER VecFrameStack so recorder sees the same 4-frame obs as the policy
-    recorder = BallPositionRecorder(env)
-    env = recorder
 
     eval_env = DummyVecEnv([make_eval_env])
     eval_env = VecFrameStack(eval_env, n_stack=4)
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
-
-    ball_tracking_callback = BallTrackingCallback(
-        recorder=recorder,
-        aux_lr=AUX_LR,
-        batch_size=AUX_BATCH,
-        aux_epochs=AUX_EPOCHS,
-        verbose=1,
-    )
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_102 — Experiment 11: Ball-Tracking Representation Supervision",
-            f"Training: clean ALE + ball-position aux loss on shared CNN features",
-            f"Aux: CNN(512)->Linear(64)->ReLU->Linear(2)->(ball_x,ball_y) | "
-            f"lr={AUX_LR} batch={AUX_BATCH} epochs={AUX_EPOCHS}",
-            f"Eval/Check: Clean ALE (no aux supervision)",
-            f"Hypothesis: ball-encoding features -> reactive policy by construction",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_124 -- Experiment 31: Paddle-Ball Proximity Reward",
+            f"Scale: {PROXIMITY_SCALE}, Max dist: {PROXIMITY_MAX_DIST}, "
+            f"Threshold: ball_y > {PROXIMITY_DESCEND_THRESHOLD}",
+            f"Training: ALE/Breakout-v5 + ProximityRewardWrapper",
+            f"Eval/Check: Standard Breakout (NO proximity reward) -- transfer test",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([
-        eval_callback, checkpoint_callback, ball_tracking_callback,
-        memorization_callback, label_callback,
-    ])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

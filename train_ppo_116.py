@@ -1,32 +1,23 @@
 """
-PPO_107 — Experiment 16: Adversarial Cursor (visible secondary agent)
+PPO_116 -- Experiment 25: Randomized Brick Layouts During Training
 
-After 106 experiments, PPO always memorizes in deterministic non-adversarial
-environments. BeamRider proved adversarial entities with agency force reactivity.
-This experiment ports the mechanism directly: a visible cursor that has its own
-state machine, approaches the ball when the paddle isn't tracking, and attacks
-(pushes the ball) if the paddle doesn't react.
+Every model tested on the brick layout test showed the same pattern:
+deterministic on full layout (unique=1), binary succeed/fail on half-bricks.
+The policy memorizes a fixed paddle pattern that targets specific bricks.
 
-The key innovation over PPO_105/106: the threat is a VISIBLE ENTITY WITH AGENCY.
-The cursor moves across the screen, the agent sees it, and has warning frames
-to react before the attack hits. This mirrors BeamRider's fundamental structure:
-visible enemies → threat perception → evasive action → survival.
-
-When the paddle tracks the ball, the cursor retreats and stays hidden. This
-creates a natural reward gradient: track the ball → cursor stays away → score.
-Don't track → cursor attacks → ball dodges → miss → lower score.
-
-The cursor is only visible during THREATENING and ATTACK states. During
-APPROACHING and COOLDOWN, it's invisible — the observation looks identical
-to standard Breakout. This means in eval (standard Breakout, no wrapper),
-there's no missing cursor because tracking keeps a hidden cursor at bay.
+This experiment trains on Breakout where the brick layout is DIFFERENT every
+episode, randomized via setRAM(). If the policy can't predict which bricks
+exist, it MUST track the ball to score. This directly attacks the
+generalization gap revealed by the brick layout test.
 
 Design:
   - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
-              + AdversarialCursorWrapper (visible stateful adversary)
-  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
+              + AdversarialCursorWrapper (standard params, as PPO_107)
+              + RandomizedBrickWrapper (new: randomizes brick layout per reset)
+  - Eval/Check: Standard Breakout (NO wrapper) -- test transfer
+  - FROM SCRATCH (seed=116)
+  - Target: 50M steps
   - Standard PPO: NatureCNN, ent_coef=0.006
-  - Target: 50M steps (kill at 10M if SINGLE_SCRIPT at every checkpoint)
 """
 import os
 import numpy as np
@@ -46,14 +37,14 @@ from run_label_callback import RunLabelCallback
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_107"
+RUN_NAME = "PPO_116"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 ENT_COEF = 0.006
-SEED = 107
+SEED = 116
 
-# Cursor wrapper params (from calibration defaults)
+# Standard cursor params (PPO_107 baseline)
 CURSOR_PARAMS = dict(
     approach_speed=2.0,
     tracking_threshold=8,
@@ -63,6 +54,11 @@ CURSOR_PARAMS = dict(
     cooldown_frames=60,
     cursor_size=4,
 )
+
+# Brick RAM: 36 bytes (0-35), bit-packed playfield registers.
+# We randomly zero out portions of the brick RAM at each reset.
+BRICK_RAM_START = 0
+BRICK_RAM_END = 36
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -81,6 +77,57 @@ class GrayscaleResize(gym.ObservationWrapper):
         return resized[:, :, None] if resized.ndim == 2 else resized
 
 
+class RandomizedBrickWrapper(gym.Wrapper):
+    """Randomize brick layout at every reset().
+
+    Strategies (randomly chosen per reset):
+      - "full":       no change, standard layout
+      - "right_half": clear RAM[0-17]  → right-side bricks removed
+      - "left_half":  clear RAM[18-35] → left-side bricks removed
+      - "sparse":     clear 50% of brick bytes randomly
+      - "bands":      clear alternating rows
+
+    This prevents the policy from memorizing any specific brick layout.
+    """
+
+    STRATEGIES = ["full", "right_half", "left_half", "sparse", "bands"]
+    # "full" has weight 2 so the standard layout appears often enough
+    # for the policy to learn brick-breaking at all
+    WEIGHTS = [2, 1, 1, 1, 1]
+
+    def __init__(self, env, seed=None):
+        super().__init__(env)
+        self._rng = np.random.default_rng(seed)
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+
+        strategy = self._rng.choice(self.STRATEGIES, p=np.array(self.WEIGHTS) / sum(self.WEIGHTS))
+        ram = self.unwrapped.ale.getRAM()
+
+        if strategy == "right_half":
+            for addr in range(0, 18):
+                self.unwrapped.ale.setRAM(addr, 0)
+        elif strategy == "left_half":
+            for addr in range(18, 36):
+                self.unwrapped.ale.setRAM(addr, 0)
+        elif strategy == "sparse":
+            # Randomly zero 40-60% of brick bytes
+            addrs = list(range(36))
+            self._rng.shuffle(addrs)
+            n_clear = self._rng.integers(14, 22)  # ~40-60%
+            for addr in addrs[:n_clear]:
+                self.unwrapped.ale.setRAM(addr, 0)
+        elif strategy == "bands":
+            # Clear alternating pairs of rows (0-1, 4-5, etc.)
+            for row_start in [0, 4]:  # rows 0-1 and 4-5
+                for addr in range(row_start * 6, (row_start + 2) * 6):
+                    self.unwrapped.ale.setRAM(addr, 0)
+        # "full": no change
+
+        return obs, info
+
+
 def linear_schedule(start: float, end: float):
     def schedule(progress_remaining: float) -> float:
         return end + (start - end) * progress_remaining
@@ -95,12 +142,11 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    """Breakout WITH AdversarialCursorWrapper, frameskip=4."""
+    """Breakout WITH cursor wrapper + randomized bricks."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
-    # Cursor wrapper AFTER FireResetEnv, BEFORE Grayscale/ClipReward
-    # (needs RGB observation to draw cursor + ALE for setRAM)
+    env = RandomizedBrickWrapper(env, seed=SEED)
     env = AdversarialCursorWrapper(env, **CURSOR_PARAMS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
@@ -138,16 +184,13 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    pstr = ', '.join(f'{k}={v}' for k, v in CURSOR_PARAMS.items())
-    print(f"{RUN_NAME} -- Experiment 16: Adversarial Cursor (visible secondary agent)")
-    print(f"  Cursor params: {pstr}")
-    print(f"  State machine: APPROACHING (inv) -> THREATENING (vis, {CURSOR_PARAMS['warning_frames']}f warn)")
-    print(f"                 -> ATTACK (vis, +/-{CURSOR_PARAMS['push_magnitude']}px push)")
-    print(f"                 -> COOLDOWN (inv, {CURSOR_PARAMS['cooldown_frames']}f) -> respawn")
-    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, AdversarialCursorWrapper")
-    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
-    print(f"  Key innovation: visible agent with agency. Cursor is only visible")
-    print(f"    during THREATENING/ATTACK. Tracking paddle keeps cursor hidden.")
+    print(f"{RUN_NAME} -- Experiment 25: Randomized Brick Layouts")
+    print(f"  Cursor params: {CURSOR_PARAMS}")
+    print(f"  Brick strategies: {RandomizedBrickWrapper.STRATEGIES}")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, varied brick layouts")
+    print(f"  Eval/Check: Standard Breakout (NO cursor, standard bricks)")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Checkpoints: every ~5M steps")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -161,11 +204,9 @@ if __name__ == "__main__":
         log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
-    # save_freq is in ITERATIONS (n_calls), not timesteps.
-    # Each iteration = n_envs * n_steps = 32 * 128 = 4096 steps.
-    # 245 iterations * 4096 = 1,003,520 timesteps (~1M steps).
+    # save_freq=156_250 → ~5M step intervals
     checkpoint_callback = CheckpointCallback(
-        save_freq=245, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
@@ -173,12 +214,12 @@ if __name__ == "__main__":
         n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
         make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_107 -- Experiment 16: Adversarial Cursor (visible secondary agent)",
-            f"Cursor: state machine, visible during THREATENING/ATTACK only",
-            f"Params: {pstr}",
-            f"Training: ALE/Breakout-v5, fs=4, AdversarialCursorWrapper",
-            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
-            f"Key: visible agent with agency. Tracking → cursor hides. Not tracking → attack.",
+            f"PPO_116 -- Experiment 25: Randomized Brick Layouts",
+            f"Cursor: standard params (PPO_107 baseline)",
+            f"Brick strategies: {RandomizedBrickWrapper.STRATEGIES}",
+            f"Training: ALE/Breakout-v5, fs=4, AdversarialCursorWrapper + RandomizedBrickWrapper",
+            f"Eval/Check: Standard Breakout (no cursor, standard bricks)",
+            f"Key: can't memorize bricks → MUST track ball",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)

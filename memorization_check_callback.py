@@ -90,7 +90,8 @@ gym.register_envs(ale_py)
 class MemorizationCheckCallback(BaseCallback):
     def __init__(self, run_name, sticky_actions, check_freq=10_000_000,
                  n_games=20, output_dir="./recordings",
-                 max_check_steps=200_000, verbose=1, summary_lines=None,
+                 max_check_steps=200_000, max_steps_per_game=None,
+                 verbose=1, summary_lines=None,
                  make_env_fn=None, check_deterministic_false=False):
         """
         Args:
@@ -102,6 +103,10 @@ class MemorizationCheckCallback(BaseCallback):
             output_dir: Directory for CSV output.
             max_check_steps: Safety cap — aborts check if this many total
                              steps are taken without completing n_games.
+            max_steps_per_game: Per-game step cap. If a single game exceeds
+                                this many steps, force-end it and record
+                                the current score. Prevents runaway games
+                                where the policy keeps the ball alive forever.
             verbose: Print check results to console.
             summary_lines: Lines to write as comments at the top of a new CSV.
             make_env_fn: Optional callable that returns a VecFrameStack-wrapped
@@ -119,6 +124,7 @@ class MemorizationCheckCallback(BaseCallback):
         self.n_games = n_games
         self.output_dir = output_dir
         self.max_check_steps = max_check_steps
+        self.max_steps_per_game = max_steps_per_game
         self.summary_lines = summary_lines or []
         self.make_env_fn = make_env_fn
         self.check_deterministic_false = check_deterministic_false
@@ -144,7 +150,9 @@ class MemorizationCheckCallback(BaseCallback):
                 headers.extend([
                     "stoch_unique_scores", "stoch_avg_score",
                     "stoch_best_score", "stoch_worst_score",
-                    "stoch_verdict"
+                    "stoch_verdict",
+                    "stoch_frames_mean", "stoch_frames_min",
+                    "stoch_frames_max", "stoch_frames_unique"
                 ])
             self.track_log_writer.writerow(headers)
             self.track_log_file.flush()
@@ -176,10 +184,13 @@ class MemorizationCheckCallback(BaseCallback):
         """
         obs = env.reset()
         scores = []
+        frame_counts = []
         episode = 0
         steps_taken = 0
+        game_start_step = 0
         game_score = 0.0
         start_time = time.time()
+        per_game_cap = self.max_steps_per_game
 
         mode_label = "det=True" if deterministic else "det=False"
         if self.verbose:
@@ -192,46 +203,95 @@ class MemorizationCheckCallback(BaseCallback):
             steps_taken += 1
             game_score += float(reward[0]) if hasattr(reward, '__iter__') else float(reward)
 
+            game_steps = steps_taken - game_start_step
+            force_ended = False
+
+            # Per-game step cap: force-end runaway games
+            if per_game_cap and game_steps >= per_game_cap:
+                force_ended = True
+                scores.append(round(game_score, 1))
+                frame_counts.append(game_steps)
+                episode += 1
+                if self.verbose:
+                    print(f"[MemorizationCheck{label_suffix}]   game {episode}/{self.n_games}: "
+                          f"{scores[-1]:.0f} pts, {frame_counts[-1]} frames (HIT STEP CAP)")
+                # Reset for next game
+                game_score = 0.0
+                game_start_step = steps_taken
+                obs = env.reset()
+                continue  # skip done-check this iteration
+
             if done[0]:
                 lives = info[0].get("lives", -1)
                 if lives == 0:
                     scores.append(round(game_score, 1))
+                    frame_counts.append(game_steps)
                     episode += 1
                     game_score = 0.0
+                    game_start_step = steps_taken
                     obs = env.reset()
+                    if self.verbose:
+                        print(f"[MemorizationCheck{label_suffix}]   game {episode}/{self.n_games}: "
+                              f"{scores[-1]:.0f} pts, {frame_counts[-1]} frames")
                 else:
                     # Life lost — fire to respawn
                     obs, _, _, _ = env.step([1])
+            elif steps_taken % 50_000 == 0:
+                if self.verbose:
+                    print(f"[MemorizationCheck{label_suffix}]   ... {steps_taken:,} steps, "
+                          f"{episode}/{self.n_games} games complete, current game score: {game_score:.0f}")
 
         elapsed = time.time() - start_time
-        return scores, elapsed
+        return scores, frame_counts, elapsed
 
     @staticmethod
-    def _compute_stats(scores):
-        """Return (unique, avg, best, worst, verdict) from a list of scores."""
+    def _compute_stats(scores, frame_counts=None):
+        """Return (unique, avg, best, worst, verdict) plus optional frame stats.
+
+        Frame counts measure game length in env steps. When combined with
+        score diversity, they distinguish genuine behavioral variation from
+        noise-masked script replay:
+          - Many unique scores + 1 unique frame count → same script, score noise
+          - Many unique scores + many unique frame counts → real variation
+        """
         if not scores:
-            return 0, 0.0, 0.0, 0.0, "INCOMPLETE"
+            return 0, 0.0, 0.0, 0.0, "INCOMPLETE", None
         unique = len(set(scores))
         avg = sum(scores) / len(scores)
         best = max(scores)
         worst = min(scores)
         verdict = "SINGLE_SCRIPT" if unique <= 2 else "MULTIPLE_SCRIPTS"
-        return unique, round(avg, 1), best, worst, verdict
 
-    def _log_results(self, scores, elapsed, label):
-        """Print results to console. Returns verdict string."""
-        unique, avg, best, worst, verdict = self._compute_stats(scores)
+        frame_stats = None
+        if frame_counts:
+            frame_stats = {
+                'unique': len(set(frame_counts)),
+                'mean': sum(frame_counts) / len(frame_counts),
+                'min': min(frame_counts),
+                'max': max(frame_counts),
+            }
+        return unique, round(avg, 1), best, worst, verdict, frame_stats
+
+    def _log_results(self, scores, frame_counts, elapsed, label):
+        """Print results to console. Returns (unique, avg, best, worst, verdict, frame_stats)."""
+        unique, avg, best, worst, verdict, frame_stats = \
+            self._compute_stats(scores, frame_counts)
         if self.verbose and scores:
             tag = "*** SINGLE_SCRIPT ***" if verdict == "SINGLE_SCRIPT" else "MULTIPLE_SCRIPTS"
+            frame_str = ""
+            if frame_stats:
+                frame_str = (f" | frames: {frame_stats['mean']:.0f} avg, "
+                           f"{frame_stats['min']}-{frame_stats['max']} range, "
+                           f"{frame_stats['unique']} unique")
             print(f"[MemorizationCheck{label}] Step {self.num_timesteps:,} | "
                   f"{len(scores)} games in {elapsed:.0f}s | "
                   f"unique={unique} | avg={avg:.1f} | best={best:.0f} | "
-                  f"worst={worst:.0f} | {tag}")
+                  f"worst={worst:.0f}{frame_str} | {tag}")
             if verdict == "SINGLE_SCRIPT":
                 print(f"[MemorizationCheck{label}] Model plays a fixed sequence "
                       f"at this step count. Training continues — this is "
                       f"informational, not a stop condition.")
-        return unique, avg, best, worst, verdict
+        return unique, avg, best, worst, verdict, frame_stats
 
     def _run_check(self):
         # ---- Build env ----
@@ -241,15 +301,16 @@ class MemorizationCheckCallback(BaseCallback):
             check_env = self._make_default_env()
 
         # ---- det=True check (always runs) ----
-        det_scores, det_elapsed = self._run_episodes(check_env, deterministic=True)
-        det_unique, det_avg, det_best, det_worst, det_verdict = \
-            self._log_results(det_scores, det_elapsed, "")
+        det_scores, det_frames, det_elapsed = self._run_episodes(check_env, deterministic=True)
+        det_unique, det_avg, det_best, det_worst, det_verdict, det_frame_stats = \
+            self._log_results(det_scores, det_frames, det_elapsed, "")
 
         check_env.close()
 
         # ---- det=False check (optional) ----
         stoch_unique = stoch_avg = stoch_best = stoch_worst = 0.0
         stoch_verdict = ""
+        stoch_frame_mean = stoch_frame_min = stoch_frame_max = stoch_frame_unique = 0
         stoch_scores = []
 
         if self.check_deterministic_false:
@@ -258,10 +319,16 @@ class MemorizationCheckCallback(BaseCallback):
             else:
                 check_env = self._make_default_env()
 
-            stoch_scores, stoch_elapsed = self._run_episodes(
+            stoch_scores, stoch_frames, stoch_elapsed = self._run_episodes(
                 check_env, deterministic=False, label_suffix=" stoch")
-            stoch_unique, stoch_avg, stoch_best, stoch_worst, stoch_verdict = \
-                self._log_results(stoch_scores, stoch_elapsed, " stoch")
+            stoch_unique, stoch_avg, stoch_best, stoch_worst, stoch_verdict, stoch_frame_stats = \
+                self._log_results(stoch_scores, stoch_frames, stoch_elapsed, " stoch")
+
+            if stoch_frame_stats:
+                stoch_frame_mean = round(stoch_frame_stats['mean'], 1)
+                stoch_frame_min = stoch_frame_stats['min']
+                stoch_frame_max = stoch_frame_stats['max']
+                stoch_frame_unique = stoch_frame_stats['unique']
 
             check_env.close()
 
@@ -282,10 +349,24 @@ class MemorizationCheckCallback(BaseCallback):
         ]
         if self.check_deterministic_false:
             row.extend([
-                stoch_unique, stoch_avg, stoch_best, stoch_worst, stoch_verdict
+                stoch_unique, stoch_avg, stoch_best, stoch_worst, stoch_verdict,
+                stoch_frame_mean, stoch_frame_min, stoch_frame_max, stoch_frame_unique
             ])
         self.track_log_writer.writerow(row)
         self.track_log_file.flush()
+
+        # ---- Write per-game scores to companion file for pattern comparison ----
+        per_game_path = os.path.join(self.output_dir, f"{self.run_name}_per_game_scores.jsonl")
+        import json
+        per_game_row = {
+            "timestamp": datetime.now().isoformat(),
+            "training_step": self.num_timesteps,
+            "det_scores": [float(s) for s in det_scores] if det_scores else [],
+        }
+        if self.check_deterministic_false and stoch_scores:
+            per_game_row["stoch_scores"] = [float(s) for s in stoch_scores]
+        with open(per_game_path, "a") as f:
+            f.write(json.dumps(per_game_row) + "\n")
 
     def _on_training_end(self) -> None:
         if hasattr(self, "track_log_file") and not self.track_log_file.closed:

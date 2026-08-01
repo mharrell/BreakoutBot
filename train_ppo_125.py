@@ -1,24 +1,37 @@
 """
-PPO_100 — Experiment 9a: Y-Perturb 50% + Ball-Hit Reward (1.0/hit)
+PPO_125 -- Experiment 32: Randomized Brick Pre-Clearing
 
-Combines the two anti-memorization approaches that each failed alone:
-  - Dynamics randomization (50% Y-perturb): breaks timed scripts by teleporting the ball
-  - Ball-tracking auxiliary reward (1.0/hit): tells the agent what to do instead
+Every approach so far either changes the environment dynamically (bumpers)
+or modifies the reward function (entropy, proximity). PPO_125 takes a
+different angle: randomize the INITIAL state.
 
-Neither approach alone prevented SINGLE_SCRIPT on clean ALE:
-  - 10% Y-perturb alone (PPO_55/57/58): SINGLE_SCRIPT at all probabilities
-  - Hit reward alone (PPO_92/93): SINGLE_SCRIPT at 1.0 and 2.0/hit
+At each reset, 15-25 random bricks are cleared from the wall. Each of the
+32 parallel envs gets a different pattern of holes. A script targeting
+specific brick positions fails on episodes where those bricks are gone.
+The policy sees the holes in the observation and must adapt its targeting
+to the specific layout it's given.
 
-Hypothesis: randomization creates the need to track the ball; the auxiliary
-reward makes tracking more rewarding than random sweeping. Together they
-should produce a policy whose argmax actually observes ball position rather
-than replaying a fixed action sequence — and that transfers to clean ALE.
+Uses 1-life training (no EpisodicLifeEnv) for more frequent resets:
+  - Standard: ~5M frames / 5000 fps = 1000 episodes = 1000 layouts
+  - 1-life: same frames = 5000 episodes = 5000 layouts
+5x more layout variation per training step.
+
+Unlike per-episode dynamics randomization (PPO_33), the brick layout IS the
+visual observation — the policy can't "condition and ignore" because the
+layout IS what it must interact with. To score, it must see where the bricks
+are and aim accordingly.
+
+Key test: eval on CLEAN Breakout (full 36-brick wall, EpisodicLifeEnv).
+Can the policy trained on randomly-depleted walls adapt to a full wall?
+If it learned visual reactivity, it should perform well on any layout.
 
 Design:
-  - Training:  ALE/Breakout-v5 + Y-perturb (50%/30f/±8px) + BallTrackingReward(hit_only, 1.0)
-  - Eval/Check: Clean ALE/Breakout-v5 (no perturbation, no auxiliary reward)
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - Training: ALE/Breakout-v5, fs=4, NO EpisodicLifeEnv (1-life episodes)
+              + BrickPreclearWrapper(min_clear=15, max_clear=25)
+  - Eval/Check: Standard Breakout WITH EpisodicLifeEnv (5 lives, full wall)
+  - FROM SCRATCH (seed=125)
+  - Target: 25M steps
+  - Standard PPO: NatureCNN, ent_coef=0.006
 """
 import os
 import numpy as np
@@ -32,24 +45,22 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
-from ale_dynamics_randomized import ALEBreakoutDynamicsRandomized
-from ale_ball_tracking_reward import BallTrackingReward
 from run_label_callback import RunLabelCallback
+from brick_preclear_wrapper import BrickPreclearWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_100"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_125"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-BALL_Y_PROB = 0.50
-COOLDOWN = 30
-BALL_Y_RANGE = 8
-MODE = "hit_only"
-HIT_REWARD = 1.0
 ENT_COEF = 0.006
-SEED = 100
+SEED = 125
+
+# Brick pre-clearing
+MIN_CLEAR = 15
+MAX_CLEAR = 25
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -82,21 +93,14 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    # Dynamics first (perturbs ball in RAM), then tracking reward (reads perturbed position)
-    env = ALEBreakoutDynamicsRandomized(
-        env,
-        ball_y_prob=BALL_Y_PROB,
-        ball_x_prob=0.0,
-        paddle_x_prob=0.0,
-        cooldown_frames=COOLDOWN,
-        ball_y_range=BALL_Y_RANGE,
-        seed=SEED,
-    )
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    """Breakout + brick pre-clearing. 1-life episodes (no EpisodicLifeEnv)."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
-    env = EpisodicLifeEnv(env)
+    # NO EpisodicLifeEnv — 1-life episodes = more frequent pre-clearing
+    # BrickPreclearWrapper MUST be before GrayscaleResize so the NOOP
+    # step's observation goes through the full processing chain.
+    env = BrickPreclearWrapper(env, min_clear=MIN_CLEAR, max_clear=MAX_CLEAR)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
@@ -104,6 +108,7 @@ def make_training_env():
 
 
 def make_eval_env():
+    """Standard Breakout WITH EpisodicLifeEnv, full wall -- transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -116,6 +121,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITH EpisodicLifeEnv -- memcheck on full wall."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -130,12 +136,13 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 9a: Y-Perturb 50% + Ball-Hit Reward (1.0/hit)")
-    print(f"  Ball Y prob: {BALL_Y_PROB} | Cooldown: {COOLDOWN}f | Range: ±{BALL_Y_RANGE}px")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: ALE + 50% Y-perturb + ball-hit aux reward + ClipRewardEnv")
-    print(f"  Eval/Check: Clean ALE (no perturbation, no auxiliary reward)")
-    print(f"  Hypothesis: randomization breaks scripts + aux reward teaches tracking")
+    print(f"{RUN_NAME} -- Experiment 32: Randomized Brick Pre-Clearing")
+    print(f"  Clear range: {MIN_CLEAR}-{MAX_CLEAR} bricks per reset")
+    print(f"  Training: ALE/Breakout-v5, fs=4, 1-life (NO EpisodicLifeEnv)")
+    print(f"           + BrickPreclearWrapper")
+    print(f"  Eval/Check: Standard Breakout WITH EpisodicLifeEnv, full wall")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Entropy coef: {ENT_COEF}")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -146,26 +153,27 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_100 — Experiment 9a: Y-Perturb 50% + Ball-Hit Reward (1.0/hit)",
-            f"Training: 50% Y-perturb (±{BALL_Y_RANGE}px, {COOLDOWN}f cooldown) + {MODE} aux",
-            f"Eval/Check: Clean ALE (no perturbation, no auxiliary reward)",
-            f"Hypothesis: randomization + tracking reward → reactive argmax",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_125 -- Experiment 32: Randomized Brick Pre-Clearing",
+            f"Clear: {MIN_CLEAR}-{MAX_CLEAR} bricks per reset",
+            f"Training: ALE/Breakout-v5, 1-life + BrickPreclearWrapper",
+            f"Eval/Check: Standard Breakout, 5-life, FULL wall -- transfer test",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

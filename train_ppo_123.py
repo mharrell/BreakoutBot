@@ -1,22 +1,30 @@
 """
-PPO_105 -- Experiment 14: Adversarial Breakout
+PPO_123 -- Experiment 30: Extreme Bumper (2 bumpers, fast reposition)
 
-BeamRider proved that adversarial environments (enemies that aim at you)
-force reactive PPO policies, even without hard failure constraints.
-This experiment ports the adversarial mechanism to Breakout: the ball
-actively dodges a paddle that isn't tracking it.
+PPO_120's single slow bumper produced a 83-pt script by 11M — the argmax
+found paths around one obstacle. PPO_123 escalates:
+
+  - 2 independent bumpers (double coverage, half the open lanes)
+  - Faster reposition: 60-150 frames (vs 120-300)
+  - Only 3+ brick shapes (3-9 bricks each, dropped 1-2 brick micro-shapes)
+  - Clean old-bumper cleanup (no indestructible residue accumulation)
+
+A script that works for one bumper configuration fails when either bumper
+moves. With 2 bumpers each repositioning every 1-2.5 seconds, the number
+of possible obstacle configurations is combinatorially vast. A script
+cannot account for all of them.
+
+Key test: eval on CLEAN Breakout (no bumper). If the policy learned to
+navigate around unpredictable obstacles reactively, it should perform
+well on clean Breakout — and the argmax should NOT be a single script.
 
 Design:
-  - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
-              + AdversarialBallWrapper (strength=2.5, paddle_zone_y=140)
-  - Eval/Check: Standard ALE/Breakout-v5 (NO adversarial wrapper)
-              Tests whether tracking skills transfer to normal physics.
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv (5 lives)
+              + ExtremeBumperWrapper(num_bumpers=2, reposition=(60,150))
+  - Eval/Check: Standard Breakout (NO bumper) -- transfer test
+  - FROM SCRATCH (seed=123)
+  - Target: 25M steps
   - Standard PPO: NatureCNN, ent_coef=0.006
-  - Target: 50M steps
-
-Hypothesis: If the ball dodges a stationary paddle, fixed sweep scripts
-become non-viable (ball drifts away from the sweep zone). The only way
-to score is to track the ball. This should force MULTIPLE_SCRIPTS.
 """
 import os
 import numpy as np
@@ -29,21 +37,25 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
-from adversarial_ball_wrapper import AdversarialBallWrapper
 from autoreset_wrapper import AutoResetWrapper
 from run_label_callback import RunLabelCallback
+from extreme_bumper_wrapper import ExtremeBumperWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_105"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_123"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 ENT_COEF = 0.006
-SEED = 105
-ADV_STRENGTH = 2.5
-ADV_ZONE_Y = 140
+SEED = 123
+
+# Extreme bumper: 2 bumpers, fast reposition, 3+ brick shapes only
+NUM_BUMPERS = 2
+REPOSITION_RANGE = (60, 150)
+ROW_RANGE = (4, 13)
+BIT_RANGE = (0, 4)
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -76,14 +88,16 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    """Breakout WITH AdversarialBallWrapper — ball dodges lazy paddle."""
+    """Breakout + 2 fast-moving bumpers."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
-    # AdversarialBallWrapper AFTER FireResetEnv, BEFORE Grayscale/ClipReward
-    # (needs access to ale.getRAM/setRAM)
-    env = AdversarialBallWrapper(env, strength=ADV_STRENGTH, paddle_zone_y=ADV_ZONE_Y)
     env = EpisodicLifeEnv(env)
+    env = ExtremeBumperWrapper(
+        env, num_bumpers=NUM_BUMPERS,
+        row_range=ROW_RANGE, bit_range=BIT_RANGE,
+        reposition_range=REPOSITION_RANGE,
+    )
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
@@ -91,7 +105,7 @@ def make_training_env():
 
 
 def make_eval_env():
-    """Standard Breakout WITHOUT adversarial wrapper — test transfer."""
+    """Standard Breakout WITHOUT bumper -- transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -104,7 +118,7 @@ def make_eval_env():
 
 
 def make_check_env():
-    """Standard Breakout WITHOUT adversarial wrapper — test transfer."""
+    """Standard Breakout WITHOUT bumper -- memcheck on clean physics."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -119,12 +133,15 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} -- Experiment 14: Adversarial Breakout")
-    print(f"  Training: AdversarialBallWrapper (strength={ADV_STRENGTH}, "
-          f"zone_y={ADV_ZONE_Y})")
-    print(f"  Eval/Check: Standard Breakout (no adversarial wrapper)")
-    print(f"  Hypothesis: adversarial ball forces tracking -> MULTIPLE_SCRIPTS")
-    print(f"  Mechanism: ball dodges lazy paddle, scripts become non-viable")
+    print(f"{RUN_NAME} -- Experiment 30: Extreme Bumper")
+    print(f"  Bumpers: {NUM_BUMPERS}")
+    print(f"  Reposition range: {REPOSITION_RANGE} frames")
+    print(f"  Row range: {ROW_RANGE}, Bit range: {BIT_RANGE}")
+    print(f"  Shapes: 3+ bricks only (13 shapes)")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv + ExtremeBumper")
+    print(f"  Eval/Check: Standard Breakout (NO bumper) -- transfer test")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Entropy coef: {ENT_COEF}")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -135,24 +152,23 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_105 -- Experiment 14: Adversarial Breakout",
-            f"Training: AdversarialBallWrapper (strength={ADV_STRENGTH}, zone_y={ADV_ZONE_Y})",
-            f"Eval/Check: Standard Breakout (no adversarial wrapper)",
-            f"Hypothesis: adversarial ball forces reactive tracking",
-            f"Mechanism: ball dodges lazy paddle, scripts become non-viable",
-            f"Comparison: BeamRider proves adversarial threats force reactivity",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}, frameskip=4",
+            f"PPO_123 -- Experiment 30: Extreme Bumper",
+            f"Bumpers: {NUM_BUMPERS}, Reposition: {REPOSITION_RANGE} frames",
+            f"Shapes: 13 (3+ bricks), Rows: {ROW_RANGE}, Bits: {BIT_RANGE}",
+            f"Training: ALE/Breakout-v5 + ExtremeBumperWrapper",
+            f"Eval/Check: Standard Breakout (NO bumper) -- transfer test",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)

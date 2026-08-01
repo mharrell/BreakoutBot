@@ -1,28 +1,28 @@
 """
-PPO_101 — Experiment 10: Life-Loss Penalty
+PPO_114 -- Experiment 23: Multiple Independent Cursors (Variant C)
 
-BeamRider proved that hard failure constraints force reactive PPO policies.
-Breakout's failure mode is soft — lose the ball, bricks stay broken, re-serve.
-Scripts that break 3-5 bricks per life are locally optimal.
+Two asymmetric cursor adversaries with independent state machines:
+  Cursor A (fast/light): speed=5, push=2, threshold=4, warning=3, cooldown=40
+    Spawns left side. Tight tracking requirement. Quick, annoying attacks.
+  Cursor B (slow/heavy): speed=1.5, push=8, threshold=16, warning=8, cooldown=80
+    Spawns right side. Loose tracking requirement. Slow, devastating attacks.
 
-This experiment adds a negative reward on every life loss, making memorized
-sweep scripts net-negative:
-    Sweep script:  +4 (bricks) - 10 (penalty) = -6 net
-    Do nothing:     0 reward
-    Reactive play: +30 (bricks) - 10 (penalty) = +20 net
+Parallel threat timelines cannot be simultaneously satisfied by a single
+scripted paddle response. The policy must trade off between:
+  - Tracking tightly enough for Cursor A (threshold=4 → within 4px of ball)
+  - Never ignoring the ball long enough for Cursor B to detonate (8-frame warning)
+  - Managing two independent approach/cooldown cycles
 
-The penalty is annealed from 0→10 over 5M steps to avoid crushing exploration
-before the agent learns basic gameplay.
+Hypothesis: two adversaries with different demands → policy must genuinely
+attend to the ball AND both cursor states → breaks SINGLE_SCRIPT ceiling.
 
 Design:
-  - LifeLossPenalty BEFORE EpisodicLifeEnv, AFTER ClipRewardEnv
-    (so penalty isn't clipped to -1 by ClipRewardEnv)
-  - Wrapper order: ALE → NoopReset → FireReset → EpisodicLife →
-    GrayscaleResize → ClipRewardEnv → LifeLossPenalty → Monitor
-  - Standard PPO: NatureCNN, ent_coef=0.006
-  - Training: ALE/Breakout-v5, frameskip=1
-  - Eval/Check: Clean ALE/Breakout-v5 (no penalty, standard wrappers)
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv
+              + MultiCursorWrapper (2 asymmetric cursors)
+  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
+  - FROM SCRATCH (seed=114)
   - Target: 50M steps
+  - Standard PPO: NatureCNN, ent_coef=0.006
 """
 import os
 import numpy as np
@@ -35,21 +35,43 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
+from cursor_variants import MultiCursorWrapper
 from autoreset_wrapper import AutoResetWrapper
-from life_loss_penalty import LifeLossPenalty
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_101"
+RUN_NAME = "PPO_114"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-PENALTY = 10.0
-ANNEAL_STEPS = 5_000_000
 ENT_COEF = 0.006
-SEED = 101
+SEED = 114
+
+# Two asymmetric cursors:
+#   A: fast/light — approach_speed=5, push=2, tracking_threshold=4, warning=3, cooldown=40
+#   B: slow/heavy — approach_speed=1.5, push=8, tracking_threshold=16, warning=8, cooldown=80
+CURSOR_CONFIGS = [
+    {
+        'approach_speed': 5.0,
+        'tracking_threshold': 4,
+        'threat_radius': 8,
+        'warning_frames': 3,
+        'push_magnitude': 2.0,
+        'cooldown_frames': 40,
+        'cursor_size': 4,
+    },
+    {
+        'approach_speed': 1.5,
+        'tracking_threshold': 16,
+        'threat_radius': 8,
+        'warning_frames': 8,
+        'push_magnitude': 8.0,
+        'cooldown_frames': 80,
+        'cursor_size': 4,
+    },
+]
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -82,20 +104,20 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    # Standard Atari wrappers first (closest to ALE)
+    """Breakout WITH MultiCursorWrapper, fs=4."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
+    env = MultiCursorWrapper(env, cursor_configs=CURSOR_CONFIGS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
-    # LifeLossPenalty AFTER ClipRewardEnv so penalty isn't clipped to [-1,+1]
-    env = LifeLossPenalty(env, penalty=PENALTY, anneal_steps=ANNEAL_STEPS)
     env = Monitor(env)
     return env
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -108,6 +130,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -122,11 +145,15 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} -- Experiment 10: Life-Loss Penalty ({PENALTY}/life)")
-    print(f"  Penalty: {PENALTY}/life loss, annealed over {ANNEAL_STEPS:,} steps")
-    print(f"  Training: Clean ALE + life-loss penalty (after ClipRewardEnv)")
-    print(f"  Eval/Check: Clean ALE (no penalty, standard wrappers)")
-    print(f"  Hypothesis: scripts net-negative -> PPO forced toward reactive play")
+    print(f"{RUN_NAME} -- Experiment 23: Multiple Independent Cursors (Variant C)")
+    print(f"  Cursor A (fast/light): speed=5.0, push=2.0, threshold=4, warning=3, cooldown=40")
+    print(f"    Spawns left side. Tight tracking. Quick, annoying attacks.")
+    print(f"  Cursor B (slow/heavy): speed=1.5, push=8.0, threshold=16, warning=8, cooldown=80")
+    print(f"    Spawns right side. Loose tracking. Slow, devastating attacks.")
+    print(f"  Attack combination: independent (capped at 20px/step total)")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, MultiCursorWrapper")
+    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -137,26 +164,31 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
+    # save_freq empirically corresponds to steps/n_envs (not iterations).
+    # save_freq=156,250 → saves every ~5M steps.
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_101 -- Experiment 10: Life-Loss Penalty ({PENALTY}/life)",
-            f"Training: clean ALE + {PENALTY}/life penalty (annealed {ANNEAL_STEPS:,} steps)",
-            f"Eval/Check: Clean ALE (no penalty)",
-            f"Hypothesis: scripts net-negative -> forced toward reactive play",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_114 -- Experiment 23: Multiple Independent Cursors (Variant C)",
+            f"Cursor A: speed=5.0, push=2.0, threshold=4, warning=3, cooldown=40 (left)",
+            f"Cursor B: speed=1.5, push=8.0, threshold=16, warning=8, cooldown=80 (right)",
+            f"Training: ALE/Breakout-v5, fs=4, MultiCursorWrapper (2 asymmetric cursors)",
+            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
+            f"Hypothesis: parallel threats → no single script works → breaks SINGLE_SCRIPT",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

@@ -363,6 +363,82 @@ With checkpoint save_freq=100,000 (model steps) and 32 envs, each save is every 
 
 ---
 
+### F-024: MULTIPLE_SCRIPTS memcheck verdicts can be false positives from timing variance — **CONFIRMED (2026-07-30)**
+
+**Severity:** CRITICAL
+
+**Affected conclusion:** PPO_114 and PPO_115 have genuine argmax diversity (MULTIPLE_SCRIPTS on det=True)
+
+**Description:** PPO_114 (31M) and PPO_115 (50M) both showed MULTIPLE_SCRIPTS on the memorization check callback — the first models in project history to do so without sticky actions. However, the split-watcher (independent-prediction variant) revealed both models produce identical paddle movement on different brick layouts (perfect transfer: px_corr > 0.99, ALT score ≈ FULL score). The MULTIPLE_SCRIPTS verdicts were caused by score variance from life-loss timing and ball-bounce stochasticity, not from the argmax adapting to different game states.
+
+**Confirmation data:** `verify_split_watcher.py` batch run on 2026-07-30. PPO_114: 1/9 perfect transfer, FULL=436 script. PPO_115: 2/9 perfect transfer, FULL=420 script. All 7 cursor models confirmed memorized.
+
+**Lesson:** The memorization check callback's 20-game sample and binary threshold (≤2 = SINGLE_SCRIPT, ≥3 = MULTIPLE_SCRIPTS) cannot distinguish "one script with timing variance" from "multiple scripts from genuine adaptation." A memorized sequence that scores differently depending on exactly when lives are lost produces different scores from a single deterministic argmax. The split-watcher is the definitive behavioral test.
+
+**Status:** CONFIRMED. `verify_split_watcher.py` and `watch_model_split.py` now available as standard verification tools.
+
+---
+
+### F-025: The intervention probe and gradient measure distribution shifts, not argmax changes — **CONFIRMED (2026-07-30)**
+
+**Severity:** CRITICAL
+
+**Affected conclusion:** PPO_107 has "verifiable ball-tracking behavior" (33% reversal rate); cursor wrapper "taught the policy to attend to ball position"
+
+**Description:** The intervention probe (`probe_107_intervention.py`) measures whether the action probability distribution shifts after ball teleportation. It does NOT measure whether the argmax action changes. A model with 90% confidence on its top action can show real probability shifts (the other 10% redistributes) without ever changing which action it takes — exactly what happened with PPO_107-117. The 33-50% reversal rates and AUC=0.329 were real distribution shifts, but the models are all confirmed memorized by split-watcher.
+
+The dead baseline (center-hold = 0%) was correct — a hardcoded center-hold has no distribution to shift. The problem is the metric's ceiling for "memorized argmax + reactive distribution" was never established. PPO_116 (0/9 perfect transfer, 57% retention) fits this profile and should be used as a calibration baseline.
+
+**Confirmation data:** All 7 cursor models showed positive intervention signals while confirmed memorized by split-watcher. PPO_115: intervention gradient AUC=0.329, "STRONG dose-response curve" — MEMORIZED (2/9 perfect transfer).
+
+**Lesson:** The intervention probe should be renamed/reframed as a "distribution sensitivity" probe. Its results should be reported as "distribution shifted X% of the time" not "paddle reversed toward ball X% of the time." Positive intervention signals without split-watcher confirmation are NOT evidence of argmax reactivity.
+
+**Status:** CONFIRMED. Critical Rules 17-18 added to CLAUDE.md. Intervention probe documentation updated.
+
+---
+
+### F-026: Perfect transfer (px_corr > 0.99 on altered layout) is definitive memorization — **CONFIRMED (2026-07-30)**
+
+**Severity:** CRITICAL
+
+**Affected conclusion:** Any future claim of argmax reactivity in Breakout
+
+**Description:** The split-watcher with independent predictions runs the same model on two different brick layouts. If the paddle positions are perfectly correlated (px_corr > 0.99) AND ALT scores match FULL scores, the policy played identically on a different layout. This is physically impossible for a reactive policy: different bricks → different ball bounces → different tracking responses → different paddle positions. The only way to produce identical paddle movement on an altered layout is with a memorized sequence that ignores ball position entirely.
+
+Every cursor model tested (PPO_111-117) showed at least one perfect-transfer game. The pattern is bimodal: either the script accidentally transfers (ALT ≈ FULL, px_corr ≈ 1.0) or it fails (ALT << FULL, px_corr low). This is the signature of memorization.
+
+**Confirmation data:** PPO_111: 5/9 perfect transfer. PPO_114: 1/9. PPO_115: 2/9. PPO_116: 0/9 (scrambled cues variant — visual triggers never preserved). PPO_117: 2/9.
+
+**Lesson:** Perfect transfer is a sufficient condition for memorization. A single game with px_corr > 0.99 and ALT ≈ FULL is definitive — no further testing needed. The absence of perfect transfer (PPO_116) does NOT mean reactive — it means the visual cues are never preserved, which is itself evidence of memorization (scrambled cues).
+
+**Status:** CONFIRMED. Split-watcher is now the standard verification gate (CLAUDE.md Critical Rule #17).
+
+---
+
+### F-027: BeamRider is the first verified reactive PPO argmax — **FALSIFIED (2026-07-30)**
+
+**Severity:** CRITICAL
+
+**Affected conclusion:** The project's central claim that BeamRider's MULTIPLE_SCRIPTS represented genuine argmax reactivity, and that the "adversarial entities targeting agent position" mechanism forces reactive policies.
+
+**Description:** BEAMRIDER_BASELINE (10M, SEED=206) was verified on July 28 as MULTIPLE_SCRIPTS (6 unique scores at noop=0, det=True, std=33.7) — the first model in project history to pass the definitive no-noop test. This was treated as verified reactive argmax and motivated the entire cursor-wrapper experiment series (PPO_107-117) as a port of the BeamRider mechanism to Breakout.
+
+The independent-prediction split-watcher (`verify_beamrider_split.py`, July 30) revealed both BeamRider models are SINGLE_SCRIPT:
+- BEAMRIDER_baseline: exactly 4200 points every game, std=0.0, unique=1 across 10 games with different noop offsets. Action divergence 78.6% (scrambled visual cues) but identical score outcomes.
+- BEAMRIDER_MULTILIFE: exactly 2160 points every game, std=0.0, unique=1. 2/10 perfect transfer (ship_x_corr>0.99 on different enemy patterns).
+
+The previous MULTIPLE_SCRIPTS verdicts were the same confound as Breakout (F-024): score variance from environment stochasticity (noop offset, enemy timing) was mistaken for argmax diversity. The ClipRewardEnv (reward clipping to [-1,1]) in the original verification pipeline may have amplified apparent score diversity by counting clipped-reward events rather than raw game points.
+
+**Confirmation data:** `verify_beamrider_split.py` output. Two independent BeamRider instances, different noop RNG seeds, independent model predictions per side, det=True, 10 games each.
+
+**Lesson:** The distribution-vs-argmax confound is universal — it affects Breakout AND BeamRider. The "adversarial threat forces reactivity" hypothesis is falsified: PPO learns to hedge (reactive distribution + script argmax) in BeamRider the same way it does in Breakout. PPO's objective maximizes expected return; when a fixed sequence is viable, the argmax converges to it regardless of game mechanics.
+
+After 117 Breakout + 2 BeamRider experiments, no PPO model in this project's history has ever produced a verified reactive argmax.
+
+**Status:** FALSIFIED. Both BeamRider models are memorized SINGLE_SCRIPT. The split-watcher is now the only trusted reactivity diagnostic for any Atari game.
+
+---
+
 ## Summary Table
 
 | ID | Severity | Affected Conclusion | Fixable Now? |
@@ -390,3 +466,7 @@ With checkpoint save_freq=100,000 (model steps) and 32 envs, each save is every 
 | F-021 | CONFIRMATORY | Sticky actions don't prevent memorization in deep RL | N/A — validates project findings. Independently confirms Zhang et al. (2018) |
 | **F-022** | **CRITICAL** | **PPO_55b has no functional deterministic policy** | **CONFIRMED and FIXED — env pipeline bug. All scripts updated 2026-07-23.** |
 | **F-023** | **HIGH** | **Entropy variant training progress was tracked correctly** | **FIXED — resume logic added to all six scripts 2026-07-23.** |
+| **F-024** | **CRITICAL** | **PPO_114/115 have genuine argmax diversity (MULTIPLE_SCRIPTS)** | **CONFIRMED 2026-07-30 — split-watcher shows perfect transfer. Timing variance, not argmax diversity.** |
+| **F-025** | **CRITICAL** | **PPO_107 has verifiable ball-tracking (33% reversal)** | **CONFIRMED 2026-07-30 — intervention probe measures distribution shifts, not argmax changes. All cursor models memorized.** |
+| **F-026** | **CRITICAL** | **Any future claim of argmax reactivity in Breakout** | **CONFIRMED 2026-07-30 — perfect transfer on altered layout = definitive memorization. Split-watcher is standard gate.** |
+| **F-027** | **CRITICAL** | **BeamRider is the first verified reactive PPO argmax** | **FALSIFIED 2026-07-30 — both BeamRider models SINGLE_SCRIPT (std=0.0, unique=1) under split-watcher. Same distribution-vs-argmax confound.** |

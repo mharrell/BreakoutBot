@@ -1,19 +1,27 @@
 """
-PPO_92 — Experiment 8a: Ball-Hit Reward (1.0/hit)
+PPO_111 -- Experiment 20: Adversarial Cursor FROM SCRATCH (Combined: Hard Push + Fast Cursor)
 
-Rewards each paddle-ball contact equally to a brick break. The hypothesis:
-making ball-tracking as rewarding as scoring shifts the optimization landscape
-so that reactive policies occupy a higher local optimum than blind scripts.
+PPO_109 (push=8) and PPO_110 (speed=4) independently proved the cursor mechanism
+forces ball-tracking from scratch. This combines both levers:
 
-Mode: "hit_only" — +1.0 per detected paddle-ball contact via RAM hit detection.
-Training: clean ALE/Breakout-v5 (no teleports, no noise).
-Eval/Check: clean ALE/Breakout-v5.
+  - push_magnitude=8.0:  harder attacks when paddle fails to track (PPO_109: 19% reversal)
+  - approach_speed=4.0: faster cursor threat escalation (PPO_110: 42.3% reversal)
+
+These mechanisms operate on different aspects of the cursor threat model:
+  - Speed controls how quickly the cursor escalates from APPROACHING→THREATENING→ATTACK
+  - Push controls how hard the ball is deflected when the attack lands
+
+If tracking is additive: 19% + 42% → expect ~55-60% reversal
+If tracking is synergistic: the fast cursor creates more frequent attack opportunities
+  while the hard push makes each attack more consequential → could exceed 60%
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=1.0)
-  - Eval/Check: Clean ALE/Breakout-v5
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
+              + AdversarialCursorWrapper (push_magnitude=8.0, approach_speed=4.0)
+  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
+  - FROM SCRATCH (no fork, seed=111)
+  - Target: 50M steps
+  - Standard PPO: NatureCNN, ent_coef=0.006
 """
 import os
 import numpy as np
@@ -26,21 +34,32 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
+from adversarial_cursor_wrapper import AdversarialCursorWrapper
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_92"
+RUN_NAME = "PPO_111"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "hit_only"
-HIT_REWARD = 1.0
 ENT_COEF = 0.006
-SEED = 92
+SEED = 111
+
+# Combined: both top-performing levers from 108 escalation study
+# push_magnitude=8.0 (108a: 48.1% forked, 109: 19% from scratch)
+# approach_speed=4.0 (108d: 46.7% forked, 110: 42.3% from scratch)
+CURSOR_PARAMS = dict(
+    approach_speed=4.0,
+    tracking_threshold=8,
+    threat_radius=8,
+    warning_frames=5,
+    push_magnitude=8.0,
+    cooldown_frames=60,
+    cursor_size=4,
+)
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -73,10 +92,11 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    """Breakout WITH AdversarialCursorWrapper, frameskip=4."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
+    env = AdversarialCursorWrapper(env, **CURSOR_PARAMS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
@@ -85,6 +105,7 @@ def make_training_env():
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -97,6 +118,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -111,11 +133,13 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + ball-hit auxiliary reward")
-    print(f"  Eval/Check: Clean ALE (no auxiliary reward)")
-    print(f"  Hypothesis: hit reward = brick reward → tracking enters gradient")
+    pstr = ', '.join(f'{k}={v}' for k, v in CURSOR_PARAMS.items())
+    print(f"{RUN_NAME} -- Experiment 20: Adversarial Cursor FROM SCRATCH (Combined)")
+    print(f"  Cursor params: {pstr}")
+    print(f"  Combined: push_magnitude=8.0 (108a/109) + approach_speed=4.0 (108d/110)")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, AdversarialCursorWrapper")
+    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -126,26 +150,32 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
+    # save_freq empirically corresponds to steps/n_envs (not iterations).
+    # save_freq=245 produces saves every 245*32=7,840 steps (way too frequent).
+    # Target: every ~5M steps → save_freq = 5,000,000 / 32 = 156,250.
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_92 — Experiment 8a: Ball-Hit Reward ({HIT_REWARD}/hit)",
-            f"Mode: {MODE} | Training: clean ALE + ball-hit aux reward",
-            f"Eval/Check: clean ALE (no auxiliary reward)",
-            f"Hypothesis: hit=1.0 makes tracking as rewarding as scoring",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_111 -- Experiment 20: Adversarial Cursor FROM SCRATCH (Combined)",
+            f"Cursor: push_magnitude=8.0 + approach_speed=4.0 (both levers)",
+            f"Params: {pstr}",
+            f"Training: ALE/Breakout-v5, fs=4, AdversarialCursorWrapper",
+            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
+            f"Key: from scratch. Are both levers additive or synergistic?",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

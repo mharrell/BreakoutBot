@@ -1,27 +1,30 @@
 """
-PPO_106 v3 — Experiment 15: Adversarial Breakout (proportional push, frameskip=4)
+PPO_120 -- Experiment 28: Moving Bumper (Indestructible Obstacle Shapes)
 
-v1 (fs=1, constant push ±2.5 px/f): 0pt dead by 6M — error amplification death spiral.
-v2 (fs=1, proportional, max_push=15→4): 0pt dead by 3M — fs=1 applies push 4x too often.
-    Calibration showed even perfect tracking scores 2.0 at fs=1, max_push=4.
+After 120 experiments, every environment modification — sticky actions, dynamics
+randomization, adversarial threats, cursor wrappers, random ball bounces — has
+produced a memorized argmax. All of those changed the environment; none changed
+the fundamental fact that scripts are viable.
 
-v3 switches to frameskip=4 after calibration:
-      max_push  Perfect  Scripts   Gap
-         0      14       0-2      12   (baseline, no push)
-         2      14       0        14   (scripts dead, perfect untouched)
-         3      12       0-1      11   ← SWEET SPOT
-         4       6       0-2       4   (ceiling too low)
-         6       3       0-2       1   (unplayable)
+The moving bumper is a different category of intervention. Rather than adding
+noise to existing game elements, it introduces a NEW PHYSICAL OBSTACLE: a small
+indestructible brick shape (2-5 bricks) that teleports to random positions
+every 120-300 frames. The ball bounces off it; the bricks reappear instantly.
 
-At max_push=3, fs=4: perfect tracking scores 12 (86% of baseline), all scripts 0-1.
-Proportional push creates learnable gradient that constant push (PPO_105) lacked.
+Why this might work where random bounces (PPO_118) didn't:
+  - Changes PLAYFIELD GEOMETRY, not ball trajectory
+  - 15 shapes × ~10 rows × ~4 columns × 2 sides ≈ 1,200 configurations
+  - An obstacle in the ball's path creates completely different bounce patterns
+  - A script expecting clean geometry is structurally wrong, not just slightly off
+  - Small shapes (1-5 bricks) block paths without making the game unplayable
 
 Design:
-  - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
-              + AdversarialBallWrapper (dead_zone=4, gain=0.5, cap=3)
-  - Eval/Check: Standard ALE/Breakout-v5, frameskip=4 (NO adversarial wrapper)
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv (5 lives)
+              + MovingBumperWrapper (15 shapes, rows 4-13, bits 0-4)
+  - Eval/Check: Standard Breakout (NO wrapper) -- transfer test
+  - FROM SCRATCH (seed=120)
+  - Target: 25M steps
   - Standard PPO: NatureCNN, ent_coef=0.006
-  - Target: 50M steps
 """
 import os
 import numpy as np
@@ -34,23 +37,24 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
-from adversarial_ball_wrapper import AdversarialBallWrapper
 from autoreset_wrapper import AutoResetWrapper
 from run_label_callback import RunLabelCallback
+from moving_bumper_wrapper import MovingBumperWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_106"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_120"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 ENT_COEF = 0.006
-SEED = 106
-ADV_DEAD_ZONE = 4.0
-ADV_GAIN = 0.5
-ADV_ZONE_Y = 140
-ADV_MAX_PUSH = 3.0
+SEED = 120
+
+# Bumper params
+BUMPER_ROW_RANGE = (4, 13)    # middle half of playfield
+BUMPER_BIT_RANGE = (0, 4)     # innermost 5 bits (leaves room for shapes)
+BUMPER_REPOSITION = (120, 300)  # frames between moves
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -83,15 +87,15 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    """Breakout WITH AdversarialBallWrapper, frameskip=4."""
+    """Breakout WITH moving bumper obstacles."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
-    # AdversarialBallWrapper AFTER FireResetEnv, BEFORE Grayscale/ClipReward
-    # (needs access to ale.getRAM/setRAM)
-    # frameskip=4: push applied every 4th ALE frame (same cadence as standard play)
-    env = AdversarialBallWrapper(env, dead_zone=ADV_DEAD_ZONE, proportional_gain=ADV_GAIN,
-                                  paddle_zone_y=ADV_ZONE_Y, max_push=ADV_MAX_PUSH)
+    # Bumper goes before EpisodicLifeEnv so life tracking works normally
+    env = MovingBumperWrapper(env, row_range=BUMPER_ROW_RANGE,
+                              bit_range=BUMPER_BIT_RANGE,
+                              reposition_range=BUMPER_REPOSITION,
+                              seed=None)  # None = different RNG per env
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
@@ -100,7 +104,7 @@ def make_training_env():
 
 
 def make_eval_env():
-    """Standard Breakout WITHOUT adversarial wrapper — test transfer."""
+    """Standard Breakout WITHOUT bumper -- transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -113,7 +117,7 @@ def make_eval_env():
 
 
 def make_check_env():
-    """Standard Breakout WITHOUT adversarial wrapper — test transfer."""
+    """Standard Breakout WITHOUT bumper -- memorization check on clean physics."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -128,15 +132,18 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} v3 -- Experiment 15: Adversarial Breakout (fs=4, proportional, max_push={ADV_MAX_PUSH})")
-    print(f"  Training: AdversarialBallWrapper (dead_zone={ADV_DEAD_ZONE}, "
-          f"gain={ADV_GAIN}, zone_y={ADV_ZONE_Y})")
-    print(f"  Frameskip: 4 -> push applied every 4th ALE frame")
-    print(f"  Proportional push: |error| <= {ADV_DEAD_ZONE}px -> no push")
-    print(f"                      |error| > {ADV_DEAD_ZONE}px -> push = "
-          f"gain × (|error|-dead_zone), capped at {ADV_MAX_PUSH}px")
-    print(f"  Eval/Check: Standard Breakout (no adversarial wrapper)")
-    print(f"  Calibration: perfect=12, scripts=0-1, gap=11 at these params")
+    print(f"{RUN_NAME} -- Experiment 28: Moving Bumper Obstacles")
+    print(f"  Shapes: 15 types (H2, H3, V2, V3, V4, SQ2, SQ3, PLUS,")
+    print(f"          CROSS, L, L_REV, STEP, T, CORNER, DIAG)")
+    print(f"  Row range: {BUMPER_ROW_RANGE}")
+    print(f"  Bit range: {BUMPER_BIT_RANGE}")
+    print(f"  Reposition: {BUMPER_REPOSITION} frames")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv + MovingBumperWrapper")
+    print(f"  Eval/Check: Standard Breakout (NO wrapper) -- transfer test")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Entropy coef: {ENT_COEF}")
+    print(f"  Hypothesis: moving obstacles change playfield geometry,")
+    print(f"    making memorized action sequences non-viable")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -147,24 +154,23 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_106 v3 -- Experiment 15: Adversarial Breakout (fs=4, proportional)",
-            f"Training: AdversarialBallWrapper (dead_zone={ADV_DEAD_ZONE}, gain={ADV_GAIN}, cap={ADV_MAX_PUSH})",
-            f"Proportional: |error|<={ADV_DEAD_ZONE}px -> no push; excess × {ADV_GAIN} -> push",
-            f"Eval/Check: Standard Breakout (no adversarial wrapper)",
-            f"v1 (fs=1, constant): 0pt dead. v2 (fs=1, proportional): 0pt dead.",
-            f"v3 (fs=4, proportional): fs=1 amplifies push 4x. Calibration: perfect=12, scripts=0.",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}, frameskip=4",
+            f"PPO_120 -- Experiment 28: Moving Bumper Obstacles",
+            f"Shapes: 15 types, rows {BUMPER_ROW_RANGE}, bits {BUMPER_BIT_RANGE}",
+            f"Training: ALE/Breakout-v5 + MovingBumperWrapper",
+            f"Eval/Check: Standard Breakout (NO wrapper) -- transfer test",
+            f"Hypothesis: moving obstacles force reactive ball-tracking",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)

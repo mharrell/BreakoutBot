@@ -1664,3 +1664,275 @@ Training: fs=4, proportional push `dead_zone=4, gain=0.5, max_push=3`. Eval/chec
 ### Scripts Created
 
 `adversarial_ball_wrapper.py`, `calibrate_adv_wrapper.py`, `diag_env_playability.py`, `probe_ball_physics.py`, `probe_ball_speed2.py`, `test_direction_flip.py`, `watch_ppo_106.py`
+
+---
+
+## Experiments 16-25: Cursor Wrapper Generation (PPO_107-117)
+
+**Status: Documented in CURRENT_STATE.md.** These experiments ported BeamRider's adversarial threat mechanism to Breakout via a visible cursor that attacks a non-tracking paddle. Full model roster and results in CURRENT_STATE.md Model Roster section.
+
+**Summary:** All 7 cursor models (PPO_111-117) confirmed **MEMORIZED** by split-watcher verification (July 30, 2026). The cursor wrapper successfully shaped the policy *distribution* to attend to ball position (intervention probe: 33-50% reversal rates), but the *argmax* ignores those features. PPO discovered a hedging strategy: maintain a reactive-looking distribution to reduce cursor attacks during training while converging the argmax to a fixed script. The distribution-vs-argmax confound (F-006) is universal.
+
+Key files: `adversarial_cursor_wrapper.py`, `cursor_variants.py`, `verify_split_watcher.py`, `FINDINGS_2026_07_30.md`
+
+---
+
+## BeamRider Verification — FALSIFIED (July 30, 2026)
+
+The July 28 BeamRider paired experiment concluded that BEAMRIDER_BASELINE was the "first verified reactive PPO argmax in 107 runs" (MULTIPLE_SCRIPTS, noop=0 det=True, 6 unique scores, std=33.7). This conclusion was **falsified** by independent-prediction split-watcher verification on July 30.
+
+### Split-Watcher Results
+
+`verify_beamrider_split.py` — two independent BeamRider instances, different noop RNG seeds, independent model predictions per side, det=True, 10 games:
+
+| Model | Steps | Score | Std | Unique | Perfect Transfer | Verdict |
+|-------|-------|-------|-----|--------|-----------------|---------|
+| BEAMRIDER_baseline | 10M | 4200 | 0.0 | 1 | 0/10 | **MEMORIZED (SINGLE_SCRIPT)** |
+| BEAMRIDER_MULTILIFE | 10M | 2160 | 0.0 | 1 | 2/10 | **MEMORIZED (SINGLE_SCRIPT)** |
+
+Both models produce exactly one score (std=0.0, unique=1) — the definition of SINGLE_SCRIPT. The previous MULTIPLE_SCRIPTS verdicts were the timing-variance confound (F-005): score variance from environment stochasticity was mistaken for argmax diversity.
+
+**The distribution-vs-argmax confound is universal.** It affects Breakout (soft failure, 4 actions, ball-tracking) AND BeamRider (hard failure, 9 actions, enemy-evasion). PPO hedges the same way in both games: reactive distribution + script argmax.
+
+**After 119 experiments (117 Breakout + 2 BeamRider), no PPO model has ever genuinely generalized on any Atari game.**
+
+Script: `verify_beamrider_split.py`. RAM probe: `probe_beamrider_ram.py`. Updated docs: FLAWS.md F-027, CURRENT_STATE.md, CLAUDE.md, FINDINGS_2026_07_30.md.
+
+---
+
+## Experiment 26: Random Ball Bounce Perturbation — PPO_118 (COMPLETED — NEGATIVE, July 31, 2026)
+
+**Goal:** Test whether non-conditionable stochasticity in game *outcomes* (not actions, not observations) can force reactive ball-tracking where every previous approach failed.
+
+**Hypothesis:** If the ball's post-bounce trajectory is unpredictable from any pixel or history, a fixed action sequence cannot consistently score. The only winning strategy is to watch the actual ball position and react.
+
+### Why Every Previous Approach Failed
+
+Every experiment to date added conditionable noise:
+- Sticky actions: noise on actions, Breakout forgives it
+- Cursor wrapper: cursor position = f(paddle_position) → conditionable
+- BeamRider enemies: shot timing = f(ship_position) → conditionable
+- Dynamics randomization: fixed per episode → CNN conditions on first frames
+- Randomized bricks: fixed per episode → conditionable
+
+Random bounce perturbation is different: same paddle + same ball + same action → **different ball trajectory**. The noise is on the *outcome*, not the input, and is drawn fresh from an RNG each time. Not predictable, not conditionable.
+
+### Design
+
+**Mechanism:** `RandomBounceWrapper` — on every paddle bounce, randomly nudges the ball's X position (RAM 99) by a Gaussian offset (`std=3` pixels, ~±6px 95% CI). 15-frame cooldown prevents double-perturbation. Visual indicator (red→green flash) for debugging.
+
+**Detection:** 3-state machine (IDLE→PENDING→COOLDOWN), descending→ascending ball Y transition near paddle zone (Y ≥ 175), within 20px of paddle center. Pattern from `ale_ball_tracking_reward.py`.
+
+**Non-conditionability:** Perturbation applied AFTER `env.step()` via `setRAM(99, new_x)`. Current observation shows unperturbed position; next observation shows consequence. Model sees effect but cannot predict the random offset.
+
+### Training Config
+
+| Parameter | Value |
+|-----------|-------|
+| RUN_NAME | PPO_118 |
+| SEED | 118 |
+| Architecture | NatureCNN |
+| Envs | 32 |
+| n_steps | 128 |
+| batch_size | 1024 |
+| n_epochs | 4 |
+| gamma | 0.99 |
+| ent_coef | 0.006 |
+| learning_rate | 2.5e-4 → 1e-5 (linear) |
+| clip_range | 0.2 → 0.05 (linear) |
+| TARGET_STEPS | 25,000,000 |
+| Training env | ALE/Breakout-v5, fs=4, EpisodicLifeEnv + RandomBounceWrapper(std=3, cooldown=15) |
+| Eval/Check env | **Clean Breakout (NO wrapper)** — transfer test |
+| FROM SCRATCH | Yes |
+
+### Calibration (pre-training)
+
+| Baseline | Score | Bounces | Perturbations |
+|----------|-------|---------|---------------|
+| Center-hold dead script | 0 | 1 | 1 |
+| PPO_116 (memorized) | 918 | 140 | 116 |
+
+PPO_116's memorized script scores **918** with perturbations — more than double its clean Breakout score (382). The random bounces may deflect the ball into bricks the script wouldn't normally reach. This sets the bar for PPO_118: it must substantially exceed 918 to demonstrate learning beyond a noise-robust script.
+
+### Results (25M completed)
+
+Training completed at 25M steps. Split-watcher verified at three checkpoints:
+
+| Checkpoint | Steps | FULL Score | Perfect Transfer | ALT Retention | Verdict |
+|-----------|-------|------------|------------------|---------------|---------|
+| latest_15000000 | 15M | 82 | **2/9** | 167% | **MEMORIZED** |
+| best_model | 16M | 52 | **1/9** | 316% | **MEMORIZED** |
+| final_model | 25M | 413 | **1/9** | 53% | **MEMORIZED** |
+
+**All three checkpoints confirmed memorized.** The 25M final model scores 413 raw points on clean Breakout with 1/9 perfect transfers (px_corr=0.9967). The model learned a high-scoring script despite — or possibly aided by — random ball bounces during training. PPO_116 (confirmed memorized) scores 918 under the same perturbation, demonstrating that memorized scripts are robust to ball-position noise.
+
+**No evidence that non-conditionable stochasticity forces reactivity.**
+
+### Outcome
+
+**Hypothesis FALSIFIED.** Non-conditionable ball bounce perturbation does not force reactivity. Scripts survive — and sometimes benefit from — unpredictable ball trajectories in Breakout. The game is simply too forgiving.
+
+This was the last environment-modification experiment. After 120 attempts, every approach — action noise, perceptual noise, dynamics randomization, adversarial threats, and non-conditionable outcome noise — produces the same result: PPO finds a memorized script because the objective function `argmax_π E[Σ rewards]` makes scripts the optimum in any environment where they're viable.
+
+**The lesson:** Change the objective, not the environment. See Experiment 27.
+
+### Scripts Created
+
+`random_bounce_wrapper.py`, `train_ppo_118.py`
+
+---
+
+## Experiment 27: Trajectory Entropy — PPO_119 (ACTIVE — launched July 31, 2026)
+
+**Goal:** Change PPO's objective function to directly penalize the defining property of a script: identical actions at identical timesteps across episodes.
+
+**Hypothesis:** A script produces the same action in every parallel environment at each step. A reactive policy produces different actions because different game states demand different responses. Adding a bonus for cross-env action diversity makes scripts less rewarding, shifting the optimum toward reactive policies.
+
+### Why Every Environment Modification Failed
+
+After 120 experiments, the pattern is clear: changing the environment changes *which* script is optimal, not *whether* the optimum is a script. Sticky actions → noise-robust script. Cursor wrapper → cursor-dodging script. Random bounces → bounce-robust script. The fundamental issue is PPO's objective: `argmax_π E[Σ rewards]`. In any deterministic environment where a script can score points, that script IS the optimum.
+
+Trajectory entropy changes the objective itself. PPO now maximizes:
+
+```
+E[Σ game_reward + Σ trajectory_bonus]
+```
+
+where `trajectory_bonus = scale × (1 − p(action_i))` — the rarer your action among the parallel population, the higher your bonus.
+
+### Design
+
+**Mechanism:** `TrajectoryEntropyWrapper` — a VecEnv wrapper that intercepts `step_async(actions)` to capture all 32 actions, then in `step_wait()` adds a per-env bonus based on action rarity.
+
+```python
+counts = bincount(actions)          # how many envs took each action?
+probs = counts / n_envs             # p(action) across population
+bonus[i] = scale * (1 - probs[action_i])  # rare actions get more
+```
+
+- Script: all 32 envs take LEFT → p(LEFT)=1.0 → bonus=0 for everyone
+- Reactive: 16 LEFT, 12 RIGHT, 4 NOOP → p(LEFT)=0.5 → bonus=0.005 for LEFT-takers, 0.00625 for RIGHT-takers, 0.00875 for NOOP-takers
+
+**Scale calibration:** At scale=0.01, a diverse population earns ~20 bonus over a 4000-frame game vs zero for a script. Game reward is ~60. Bonus is ~33% of game reward — significant enough to shift the optimum without dominating.
+
+### Training Config
+
+| Parameter | Value |
+|-----------|-------|
+| RUN_NAME | PPO_119 |
+| SEED | 119 |
+| Architecture | NatureCNN |
+| Envs | 32 |
+| n_steps | 128 |
+| batch_size | 1024 |
+| n_epochs | 4 |
+| gamma | 0.99 |
+| ent_coef | 0.006 |
+| learning_rate | 2.5e-4 → 1e-5 (linear) |
+| clip_range | 0.2 → 0.05 (linear) |
+| TARGET_STEPS | 25,000,000 |
+| Training env | ALE/Breakout-v5, fs=4, EpisodicLifeEnv + TrajectoryEntropyWrapper(scale=0.01) |
+| Eval/Check env | **Clean Breakout (NO wrapper)** — transfer test |
+| FROM SCRATCH | Yes |
+
+### What success looks like
+
+1. **Training:** Policy learns to score while maintaining cross-env action diversity
+2. **Memcheck:** MULTIPLE_SCRIPTS on det=True (rare envs → naturally different actions at matched timesteps)
+3. **Split-watcher on clean Breakout:** ZERO perfect-transfer games. If the policy learned diverse action-selection, it cannot produce identical paddle positions on different brick layouts.
+4. **Acid test:** Split-watcher action sequences differ between FULL and ALT layouts, and those differences correlate with ball position differences — not just random diversity.
+
+### Differences from PPO's built-in ent_coef
+
+| | PPO ent_coef | Trajectory entropy |
+|---|---|---|
+| What it penalizes | Per-step distribution concentration ("be uncertain") | Cross-episode action identity ("don't be identical") |
+| What it rewards | High-entropy probability distributions | Different actions in different episodes |
+| Script behavior | Can have high distribution entropy while argmax is fixed | Zero bonus (all envs take same action) |
+| Reactive behavior | Same as script behavior | Positive bonus (different states → different actions) |
+
+PPO's ent_coef widens the distribution without shifting the mode. Trajectory entropy directly penalizes the mode being in the same place across episodes.
+
+### Fallback
+
+If still memorized (split-watcher shows perfect transfer):
+1. Increase scale (0.01 → 0.05 → 0.10) — make the bonus large enough to dominate game reward
+2. Use batch entropy (entropy of the full action distribution) instead of per-env rarity
+3. Move to approach #3 (mutual information) or #4 (adversarial predictability)
+
+### Scripts Created
+
+`trajectory_entropy_wrapper.py`, `train_ppo_119.py`
+
+---
+
+## Experiment 28: Moving Bumper Obstacles — PPO_120 (ACTIVE — launched July 31, 2026)
+
+**Goal:** Force reactivity by introducing indestructible, randomly-repositioning brick obstacles that change the playfield geometry — not just ball position or action noise.
+
+**Hypothesis:** Every previous approach added noise that scripts could survive (sticky actions, ball nudges) or condition on (per-episode randomization, cursor position). A moving obstacle that changes the actual brick layout mid-game creates combinatorially many playfield configurations — far more than a memorized action sequence can handle. A script expecting clean geometry fails when a plus-shaped indestructible bumper is parked in the ball's path.
+
+### Design
+
+**Mechanism:** `MovingBumperWrapper` — reads/writes brick RAM (bytes 0-35) via `setRAM()`. Each frame after `env.step()`, bumper bricks are restored (OR'd back into the brick bytes). The ball bounces normally; bricks reappear instantly.
+
+**Shape library (15 types):**
+| Type | Bricks | Pattern |
+|------|--------|---------|
+| H2, H3 | 2-3 | Horizontal line |
+| V2, V3, V4 | 2-4 | Vertical line |
+| SQ2, SQ3 | 4, 9 | Solid square |
+| PLUS | 5 | + shape |
+| CROSS | 5 | X shape |
+| L, L_REV | 4 | L shapes |
+| STEP | 4 | Stair-step |
+| T | 4 | T shape |
+| CORNER | 3 | Right-angle |
+| DIAG | 3 | Diagonal |
+
+**Randomization:** Every 120-300 frames, the bumper randomly selects a new shape, row (4-13), column (bits 0-4), and side (left/right). That's 15 × 10 × 5 × 2 = 1,500 possible configurations, plus the random timing.
+
+**Why this differs from PPO_118 (random ball bounces):**
+- PPO_118: ±3px ball nudge → Breakout forgives it → script survives
+- PPO_120: brick obstacle in ball path → geometrically different trajectory → script MUST adapt
+
+**Why this differs from randomized bricks (PPO_116):**
+- PPO_116: bricks randomized at reset → per-episode constant → CNN conditions on first frames
+- PPO_120: bumper repositions mid-game → changes within an episode → cannot be conditioned on
+
+### Training Config
+
+| Parameter | Value |
+|-----------|-------|
+| RUN_NAME | PPO_120 |
+| SEED | 120 |
+| Architecture | NatureCNN |
+| Envs | 32 |
+| n_steps | 128 |
+| batch_size | 1024 |
+| n_epochs | 4 |
+| gamma | 0.99 |
+| ent_coef | 0.006 |
+| TARGET_STEPS | 25,000,000 |
+| Training env | ALE/Breakout-v5 + MovingBumperWrapper(15 shapes, rows 4-13, bits 0-4) |
+| Eval/Check env | **Clean Breakout (NO wrapper)** — transfer test |
+| FROM SCRATCH | Yes |
+
+### What Success Looks Like
+
+1. **Training:** Model learns to score despite — or by tracking around — moving obstacles
+2. **Memcheck:** MULTIPLE_SCRIPTS on det=True (different obstacle positions → different action sequences)
+3. **Split-watcher on clean Breakout:** ZERO perfect-transfer games. The policy learned to respond to unexpected obstacles — a reactive skill that transfers to clean physics.
+4. **Acid test:** On altered brick layouts, the paddle tracks the ball differently because the policy reacts to unexpected geometry — not because it memorized a different script for each layout.
+
+### Fallback
+
+If still memorized:
+1. Increase bumper size (use larger shapes, more disruptive)
+2. Add vertical movement (bumper drifts row by row each frame instead of teleporting)
+3. Multiple simultaneous bumpers (2-3 independent obstacles)
+4. The bumper fundamentally changes geometry — if even this doesn't force reactivity, the only remaining lever is the objective function (see Experiments 27, 29-31).
+
+### Scripts Created
+
+`moving_bumper_wrapper.py`, `train_ppo_120.py`

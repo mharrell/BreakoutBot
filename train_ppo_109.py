@@ -1,29 +1,22 @@
 """
-PPO_103 — Experiment 12: Ball-Tracking Representation Supervision (Stronger Aux)
+PPO_109 -- Experiment 18: Adversarial Cursor FROM SCRATCH
 
-PPO_102 proved the aux supervision pipeline works: after fixing the callback,
-ball-tracking MSE dropped from 70.55 to ~0.10 (52px) in 500K aux-training steps.
-But at aux_lr=1e-4, aux_epochs=2, the features plateaued at ~55px — encoding
-ball position at left/middle/right precision, not coordinate precision.
+After 107 experiments and the 108 escalation variants, PPO_108a (push=8)
+achieved 48.1% reversal rate — 50% stronger than PPO_107's 33%. But PPO_108a
+forked from PPO_107's 19.2M pretrained weights. We don't know if the cursor
+wrapper alone creates reactivity or if it requires pretraining.
 
-PPO_103 increases the aux gradient strength 10x (5x LR × 2x epochs) to push
-through the plateau. The higher aux strength should force ball-position features
-into the CNN BEFORE PPO's script-seeking gradient solidifies.
-
-Changes from PPO_102:
-  - aux_lr: 1e-4 -> 5e-4  (stronger gradient per update)
-  - aux_epochs: 2 -> 4     (more passes over each rollout)
+This experiment tests the cursor wrapper from scratch. If PPO_109 shows
+verifiable ball-tracking at 5M, the cursor mechanism is proven to force
+reactivity independently — the BeamRider-equivalent result for Breakout.
 
 Design:
-  - BallPositionWrapper reads ball (x,y) from RAM into info dict
-  - BallPositionRecorder accumulates ball positions from VecEnv steps
-  - BallTrackingCallback trains aux head after each PPO rollout
-  - Aux head: CNN features (512) -> Linear(64) -> ReLU -> Linear(2) -> (x,y)
-  - Separate Adam optimizer for CNN + aux head (lr=5e-4)
+  - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
+              + AdversarialCursorWrapper (push_magnitude=8.0)
+  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
+  - FROM SCRATCH (no fork, seed=109)
+  - Target: 5M steps
   - Standard PPO: NatureCNN, ent_coef=0.006
-  - Training: ALE/Breakout-v5, frameskip=1
-  - Eval/Check: Clean ALE (no aux supervision)
-  - Target: 50M steps
 """
 import os
 import numpy as np
@@ -36,23 +29,31 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
+from adversarial_cursor_wrapper import AdversarialCursorWrapper
 from autoreset_wrapper import AutoResetWrapper
-from ball_position_wrapper import BallPositionWrapper
-from ball_tracking_callback import BallTrackingCallback, BallPositionRecorder
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_103"
+RUN_NAME = "PPO_109"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-AUX_LR = 5e-4
-AUX_BATCH = 256
-AUX_EPOCHS = 4
 ENT_COEF = 0.006
-SEED = 103
+SEED = 109
+
+# Push magnitude = 8 (doubled from PPO_107 baseline)
+# This was the best-performing 108 variant: 48.1% reversal at 5M
+CURSOR_PARAMS = dict(
+    approach_speed=2.0,
+    tracking_threshold=8,
+    threat_radius=8,
+    warning_frames=5,
+    push_magnitude=8.0,
+    cooldown_frames=60,
+    cursor_size=4,
+)
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -85,11 +86,11 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    # BallPositionWrapper BEFORE wrappers that modify obs (reads RAM directly)
-    env = BallPositionWrapper(env)
+    """Breakout WITH AdversarialCursorWrapper, frameskip=4."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
+    env = AdversarialCursorWrapper(env, **CURSOR_PARAMS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
@@ -98,6 +99,7 @@ def make_training_env():
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -110,6 +112,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -124,59 +127,49 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 12: Ball-Tracking Representation Supervision (Stronger Aux)")
-    print(f"  Aux LR: {AUX_LR} | Batch: {AUX_BATCH} | Epochs: {AUX_EPOCHS}")
-    print(f"  Changes from PPO_102: 5x LR (1e-4->5e-4), 2x epochs (2->4)")
-    print(f"  Training: Clean ALE + ball-position aux supervision on CNN features")
-    print(f"  Eval/Check: Clean ALE (no aux supervision)")
-    print(f"  Hypothesis: stronger aux gradient -> features encode ball at pixel precision")
+    pstr = ', '.join(f'{k}={v}' for k, v in CURSOR_PARAMS.items())
+    print(f"{RUN_NAME} -- Experiment 18: Adversarial Cursor FROM SCRATCH")
+    print(f"  Cursor params: {pstr}")
+    print(f"  Key change from PPO_107: push_magnitude 4->8 (best 108 variant)")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, AdversarialCursorWrapper")
+    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
-    # Wrap AFTER VecFrameStack so recorder sees the same 4-frame obs as the policy
-    recorder = BallPositionRecorder(env)
-    env = recorder
 
     eval_env = DummyVecEnv([make_eval_env])
     eval_env = VecFrameStack(eval_env, n_stack=4)
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
+    # save_freq is in ITERATIONS (n_calls), not timesteps.
+    # Each iteration = n_envs * n_steps = 32 * 128 = 4096 steps.
+    # 245 iterations * 4096 = 1,003,520 timesteps (~1M steps).
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=245, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
-
-    ball_tracking_callback = BallTrackingCallback(
-        recorder=recorder,
-        aux_lr=AUX_LR,
-        batch_size=AUX_BATCH,
-        aux_epochs=AUX_EPOCHS,
-        verbose=1,
-    )
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_103 — Experiment 12: Ball-Tracking Representation Supervision (Stronger Aux)",
-            f"Training: clean ALE + ball-position aux loss on shared CNN features",
-            f"Aux: CNN(512)->Linear(64)->ReLU->Linear(2)->(ball_x,ball_y) | "
-            f"lr={AUX_LR} batch={AUX_BATCH} epochs={AUX_EPOCHS}",
-            f"Changes from PPO_102: 5x LR, 2x epochs",
-            f"Eval/Check: Clean ALE (no aux supervision)",
-            f"Hypothesis: stronger aux -> pixel-precision ball features",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_109 -- Experiment 18: Adversarial Cursor FROM SCRATCH",
+            f"Cursor: push_magnitude=8.0 (doubled from PPO_107)",
+            f"Params: {pstr}",
+            f"Training: ALE/Breakout-v5, fs=4, AdversarialCursorWrapper",
+            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
+            f"Key: from scratch. Does cursor force reactivity without pretraining?",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([
-        eval_callback, checkpoint_callback, ball_tracking_callback,
-        memorization_callback, label_callback,
-    ])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

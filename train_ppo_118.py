@@ -1,25 +1,33 @@
 """
-PPO_98 — Experiment 8e: Ball-Hit Reward (1.0/hit) + Raw Atari Scores
+PPO_118 -- Experiment 26: Random Ball Bounce Perturbation
 
-PPO_92 showed that with ClipRewardEnv (every brick = 1.0), the 1.0/hit auxiliary
-reward competes at equal weight with brick-breaking. The agent optimizes for
-paddle hits because they're denser — you can hit the ball without breaking bricks.
+After 119 experiments, no PPO model has ever genuinely generalized. Every
+approach was defeated by the same mechanism: deterministic environments make
+scripts viable, and scripts are the expected-return-maximizing strategy.
 
-This variant REMOVES ClipRewardEnv so raw Atari scores flow through: top-row
-bricks are 7 points, bottom-row bricks are 1 point. A single orange brick (7 pts)
-is worth 7× a paddle hit. The Atari score gradient should naturally dominate the
-auxiliary signal, forcing the agent to learn brick-breaking AND ball-tracking
-rather than farming the auxiliary reward.
+This experiment introduces NON-CONDITIONABLE stochasticity to ball outcomes.
+On every paddle bounce, the ball's X position is randomly nudged by a small
+Gaussian offset (std=3 pixels). This makes the post-bounce trajectory
+unpredictable from any pixel or history -- no fixed action sequence can
+consistently score. The only winning strategy is reactive ball-tracking.
 
-Training: raw Atari scores + 1.0/hit auxiliary reward.
-Eval/Check: clean ALE/Breakout-v5 (standard ClipRewardEnv for comparability).
+This is fundamentally different from:
+- Sticky actions: noise on actions, Breakout forgives it
+- Cursor wrapper: cursor = f(paddle) -> conditionable
+- BeamRider enemies: shots = f(ship) -> conditionable
+- Dynamics randomization: fixed per episode -> conditionable
+
+Key test: eval on CLEAN Breakout (no wrapper). If the model learned reactive
+tracking, it transfers to deterministic physics. If it learned a noise-robust
+script, split-watcher shows perfect transfer.
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=1.0)
-               NO ClipRewardEnv — raw Atari scores (1-7/brick)
-  - Eval/Check: Clean ALE/Breakout-v5 (standard ClipRewardEnv)
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv (5 lives)
+              + RandomBounceWrapper(std=3, cooldown=15)
+  - Eval/Check: Standard Breakout (NO wrapper) -- transfer test
+  - FROM SCRATCH (seed=118)
+  - Target: 25M steps (shorter -- signal should appear early if it works)
+  - Standard PPO: NatureCNN, ent_coef=0.006
 """
 import os
 import numpy as np
@@ -32,21 +40,23 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
+from random_bounce_wrapper import RandomBounceWrapper
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_98"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_118"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "hit_only"
-HIT_REWARD = 1.0
 ENT_COEF = 0.006
-SEED = 98
+SEED = 118
+
+# Perturbation params
+BOUNCE_STD = 3.0         # Gaussian std for ball X nudge (pixels)
+COOLDOWN_FRAMES = 15     # Frames between perturbations
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -79,17 +89,22 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    """Breakout WITH random bounce perturbation."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
+    env = RandomBounceWrapper(env, perturbation_std=BOUNCE_STD,
+                              cooldown_frames=COOLDOWN_FRAMES,
+                              draw_indicator=False)  # off for speed
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
+    env = ClipRewardEnv(env)
     env = Monitor(env)
     return env
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT wrapper -- transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -102,6 +117,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT wrapper -- memorization check on clean physics."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -116,11 +132,14 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8e: Ball-Hit Reward (1.0/hit) + Raw Atari Scores")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + ball-hit aux reward, NO ClipRewardEnv (raw scores)")
-    print(f"  Eval/Check: Clean ALE (standard ClipRewardEnv)")
-    print(f"  Hypothesis: raw brick scores (1-7) dominate 1.0/hit → learns bricks first")
+    print(f"{RUN_NAME} -- Experiment 26: Random Ball Bounce Perturbation")
+    print(f"  Perturbation: Gaussian std={BOUNCE_STD}px on paddle bounces")
+    print(f"  Cooldown: {COOLDOWN_FRAMES} frames")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, random bounces")
+    print(f"  Eval/Check: Standard Breakout (NO wrapper) -- transfer test")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Entropy coef: {ENT_COEF}")
+    print(f"  Hypothesis: non-conditionable bounce noise forces reactive tracking")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -131,26 +150,29 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
+    # save_freq=156_250 → ~5M step intervals
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_98 — Experiment 8e: Ball-Hit Reward (1.0/hit) + Raw Scores",
-            f"Mode: {MODE} | Training: NO ClipRewardEnv (raw Atari scores 1-7/brick)",
-            f"Eval/Check: standard ClipRewardEnv for comparability",
-            f"Hypothesis: raw 7pt bricks dominate 1pt paddle hits → natural curriculum",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_118 -- Experiment 26: Random Ball Bounce Perturbation",
+            f"Perturbation: Gaussian std={BOUNCE_STD}px on paddle bounces",
+            f"Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv + RandomBounceWrapper",
+            f"Eval/Check: Standard Breakout (NO wrapper) -- transfer test",
+            f"Hypothesis: non-conditionable bounce noise forces reactive tracking",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

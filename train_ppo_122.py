@@ -1,25 +1,44 @@
 """
-PPO_95 — Experiment 8d: Combined (Hit + Proximity + Survival Penalty)
+PPO_122 -- Experiment 29: Ball-Binned Trajectory Entropy
 
-All three auxiliary signals together:
-  - Ball-hit reward:  +1.0 per paddle-ball contact (same as brick)
-  - Descending proximity: 0.005 × (1 - distance/40) when ball approaching
-  - Survival penalty: -0.0001 per frame (≈ -0.36 per 3600f life)
+After 121 experiments (117 Breakout + 2 BeamRider + 2 trajectory entropy), no PPO
+model has ever genuinely generalized. PPO_119 (trajectory entropy scale=0.01) and
+PPO_121 (scale=0.10) both collapsed to SINGLE_SCRIPT by 1M. The reason:
 
-The hypothesis: the hit reward makes tracking a primary objective, the
-descending proximity provides a shaping gradient during the approach, and
-the survival penalty tilts away from the "just don't die" attractor we've
-seen in multi-method combos (PPO_68b, RBO_01, PPO_79).
+  Global trajectory entropy rewards action diversity across ALL envs, but a
+  policy where half the envs go LEFT and half go RIGHT looks diverse globally
+  while still being a script — same action for the same ball position.
 
-Mode: "combined" — hit=1.0 + prox=0.005 + survival=-0.0001.
-Training: clean ALE/Breakout-v5 (no teleports, no noise).
-Eval/Check: clean ALE/Breakout-v5.
+Ball-binned entropy fixes this by conditioning on ball position:
+  1. Read ball_x from ALE RAM 99
+  2. Bin into LEFT / CENTER / RIGHT
+  3. Compute action diversity WITHIN each bin
+  4. bonus = scale x (1 - p(action | ball_bin))
+
+A script takes the same action regardless of ball position:
+  - p(LEFT | LEFT_bin) = 1.0 → zero bonus
+  - p(LEFT | CENTER_bin) = 1.0 → zero bonus
+  - p(LEFT | RIGHT_bin) = 1.0 → zero bonus
+
+A reactive policy takes different actions for different ball positions:
+  - Ball LEFT → RIGHT (move toward ball)
+  - Ball RIGHT → LEFT (move toward ball)
+  - Different action distributions per bin → positive bonus
+
+Unlike global trajectory entropy, this bonus DOES NOT VANISH when the argmax
+is a mixed-action script. The policy must diversify WITHIN ball-position bins
+to earn the bonus — which requires the policy to observe ball position.
+
+Key test: eval on CLEAN Breakout (no wrapper). If ball-binned entropy baked
+ball-conditioned action diversity into the policy, the diversity persists on eval.
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(combined)
-  - Eval/Check: Clean ALE/Breakout-v5
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv (5 lives)
+              + BallBinnedEntropyWrapper(scale=0.10, n_bins=3) at VecEnv level
+  - Eval/Check: Standard Breakout (NO wrapper) -- transfer test
+  - FROM SCRATCH (seed=122)
+  - Target: 25M steps
+  - Standard PPO: NatureCNN, ent_coef=0.006
 """
 import os
 import numpy as np
@@ -33,22 +52,25 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
 from run_label_callback import RunLabelCallback
+from ball_binned_entropy_wrapper import BallBinnedEntropyWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_95"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_122"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "combined"
-HIT_REWARD = 1.0
-PROXIMITY_SCALE = 0.005
-SURVIVAL_PENALTY = -0.0001
 ENT_COEF = 0.006
-SEED = 95
+SEED = 122
+
+# Ball-binned entropy -- bonus for taking different actions conditioned on ball position
+# Scale 0.10 matches PPO_121 for comparability
+# With uniform actions across 4 actions and 3 bins:
+#   p(action|bin) ~ 0.25 → bonus ~ 0.075/step → ~75/game vs game_reward ~30-60
+ENTROPY_SCALE = 0.10
+N_BINS = 3  # LEFT / CENTER / RIGHT
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -81,11 +103,8 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(
-        env, mode=MODE, hit_reward=HIT_REWARD,
-        proximity_scale=PROXIMITY_SCALE, survival_penalty=SURVIVAL_PENALTY,
-        seed=SEED)
+    """Standard Breakout. BallBinnedEntropyWrapper added at VecEnv level."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
     env = EpisodicLifeEnv(env)
@@ -96,6 +115,7 @@ def make_training_env():
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT entropy wrapper -- transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -108,6 +128,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT entropy wrapper -- memcheck on clean physics."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -122,43 +143,51 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8d: Combined (Hit + Proximity + Survival)")
-    print(f"  Mode: {MODE}")
-    print(f"  Hit: {HIT_REWARD} | Proximity: {PROXIMITY_SCALE} | Survival: {SURVIVAL_PENALTY}")
-    print(f"  Training: Clean ALE + all three auxiliary signals")
-    print(f"  Eval/Check: Clean ALE (no auxiliary reward)")
-    print(f"  Hypothesis: hit + prox gradient + survival penalty = strongest signal")
+    print(f"{RUN_NAME} -- Experiment 29: Ball-Binned Trajectory Entropy")
+    print(f"  Mechanism: cross-env action-diversity bonus conditioned on ball X")
+    print(f"  Scale: {ENTROPY_SCALE}, Bins: {N_BINS} (LEFT/CENTER/RIGHT)")
+    print(f"  Formula: bonus = {ENTROPY_SCALE} x (1 - p(action | ball_bin))")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv")
+    print(f"           + BallBinnedEntropyWrapper at VecEnv level")
+    print(f"  Eval/Check: Standard Breakout (NO wrapper) -- transfer test")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Entropy coef: {ENT_COEF}")
+    print(f"  Hypothesis: ball-conditioned entropy forces ball-tracking argmax")
     print()
 
+    # Build VecEnv: envs -> FrameStack -> BallBinnedEntropy
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
+    env = BallBinnedEntropyWrapper(env, entropy_scale=ENTROPY_SCALE, n_bins=N_BINS)
 
     eval_env = DummyVecEnv([make_eval_env])
     eval_env = VecFrameStack(eval_env, n_stack=4)
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_95 — Experiment 8d: Combined (Hit + Proximity + Survival)",
-            f"Mode: {MODE} | Hit={HIT_REWARD} | Prox={PROXIMITY_SCALE} | Surv={SURVIVAL_PENALTY}",
-            f"Training: clean ALE + all three auxiliary signals",
-            f"Eval/Check: clean ALE (no auxiliary reward)",
-            f"Hypothesis: combined signals strongest gradient for tracking",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_122 -- Experiment 29: Ball-Binned Trajectory Entropy",
+            f"Mechanism: cross-env action-diversity bonus conditioned on ball X",
+            f"Scale: {ENTROPY_SCALE}, Bins: {N_BINS} (LEFT/CENTER/RIGHT)",
+            f"Training: ALE/Breakout-v5 + BallBinnedEntropyWrapper",
+            f"Eval/Check: Standard Breakout (NO wrapper) -- transfer test",
+            f"Hypothesis: ball-conditioned entropy forces ball-tracking argmax",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

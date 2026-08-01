@@ -1,26 +1,30 @@
 """
-PPO_99 — Experiment 8f: Ball-Hit Reward (2.0/hit, Double) + Raw Atari Scores
+PPO_112 -- Experiment 21: Episode-Randomized Cursor Parameters (Variant A)
 
-PPO_93 showed that with ClipRewardEnv (every brick = 1.0), the 2.0/hit auxiliary
-reward out-competes brick-breaking 2:1. The agent optimizes for paddle hits
-because they're literally twice as rewarding as breaking bricks.
+If cursor timing varies per episode, the policy cannot memorize a fixed
+counter-strategy. approach_speed, push_magnitude, cooldown_frames,
+warning_frames, tracking_threshold, and threat_radius are all randomized
+from configurable distributions on every reset().
 
-This variant REMOVES ClipRewardEnv so raw Atari scores flow through: top-row
-bricks are 7 points. A single orange brick (7 pts) is worth 3.5× a paddle hit
-even at 2.0/hit. The Atari score gradient should dominate the auxiliary signal.
+Hypothesis: unpredictable timing → policy must attend to actual cursor
+state in real time → breaks SINGLE_SCRIPT ceiling.
 
-Compared to PPO_98 (1.0/hit): this tests whether a stronger auxiliary signal
-(2.0/hit) can coexist with raw brick scores (1-7) without overwhelming them.
-
-Training: raw Atari scores + 2.0/hit auxiliary reward.
-Eval/Check: clean ALE/Breakout-v5 (standard ClipRewardEnv for comparability).
+Parameters:
+  - approach_speed: log-uniform(1.0, 8.0)
+  - push_magnitude: log-uniform(1.0, 16.0)
+  - cooldown_frames: uniform_int(30, 150)
+  - warning_frames: uniform_int(2, 12)
+  - tracking_threshold: uniform(4, 20)
+  - threat_radius: uniform(4, 20)
+  cursor_size = 4 (fixed)
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=2.0)
-               NO ClipRewardEnv — raw Atari scores (1-7/brick)
-  - Eval/Check: Clean ALE/Breakout-v5 (standard ClipRewardEnv)
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv
+              + EpisodeRandomizedCursorWrapper
+  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
+  - FROM SCRATCH (seed=112)
+  - Target: 50M steps
+  - Standard PPO: NatureCNN, ent_coef=0.006
 """
 import os
 import numpy as np
@@ -33,21 +37,31 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
+from cursor_variants import EpisodeRandomizedCursorWrapper
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_99"
+RUN_NAME = "PPO_112"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "hit_double"
-HIT_REWARD = 2.0
 ENT_COEF = 0.006
-SEED = 99
+SEED = 112
+
+CURSOR_PARAMS = dict(
+    param_ranges={
+        'approach_speed': (1.0, 8.0, 'log_uniform'),
+        'push_magnitude': (1.0, 16.0, 'log_uniform'),
+        'cooldown_frames': (30, 150, 'uniform_int'),
+        'warning_frames': (2, 12, 'uniform_int'),
+        'tracking_threshold': (4, 20, 'uniform'),
+        'threat_radius': (4, 20, 'uniform'),
+    },
+    cursor_size=4,
+)
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -80,17 +94,20 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    """Breakout WITH EpisodeRandomizedCursorWrapper, fs=4."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
+    env = EpisodeRandomizedCursorWrapper(env, **CURSOR_PARAMS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
+    env = ClipRewardEnv(env)
     env = Monitor(env)
     return env
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -103,6 +120,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -117,11 +135,14 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8f: Ball-Hit Reward (2.0/hit, Double) + Raw Atari Scores")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + ball-hit aux reward, NO ClipRewardEnv (raw scores)")
-    print(f"  Eval/Check: Clean ALE (standard ClipRewardEnv)")
-    print(f"  Hypothesis: raw brick scores (1-7) keep 2.0/hit from overwhelming bricks")
+    ranges_str = '; '.join(f'{k}=[{lo},{hi}]' for k, (lo, hi, _)
+                           in CURSOR_PARAMS['param_ranges'].items())
+    print(f"{RUN_NAME} -- Experiment 21: Episode-Randomized Cursor (Variant A)")
+    print(f"  Ranges: {ranges_str}")
+    print(f"  Resample: every reset() (game start + life loss)")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, EpisodeRandomizedCursorWrapper")
+    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -132,26 +153,31 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
+    # save_freq empirically corresponds to steps/n_envs (not iterations).
+    # save_freq=156,250 → saves every ~5M steps.
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_99 — Experiment 8f: Ball-Hit Reward (2.0/hit) + Raw Scores",
-            f"Mode: {MODE} | Training: NO ClipRewardEnv (raw Atari scores 1-7/brick)",
-            f"Eval/Check: standard ClipRewardEnv for comparability",
-            f"Hypothesis: 7pt bricks (3.5× hit) keep 2.0/hit auxiliary in check",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_112 -- Experiment 21: Episode-Randomized Cursor (Variant A)",
+            f"Ranges: {ranges_str}",
+            f"Resample: every reset() — 5 lives × 32 envs = ~160 param combos/episode",
+            f"Training: ALE/Breakout-v5, fs=4, EpisodeRandomizedCursorWrapper",
+            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
+            f"Hypothesis: unpredictable timing → real-time attention → breaks SINGLE_SCRIPT",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

@@ -43,7 +43,10 @@ class AutoResetWrapper(gym.Wrapper):
             # FIRE is harmless when the ball is already in flight.
             self.env.step(1)  # FIRE
         obs, reward, terminated, truncated, info = self.env.step(action)
-        self._was_done = terminated or truncated
+        # Only autoreset on termination (life loss / game over), NOT on
+        # truncation (time limit). Truncation means the episode hit the
+        # max step limit and should end normally.
+        self._was_done = terminated
         return obs, reward, terminated, truncated, info
 
     def reset(self, **kwargs):

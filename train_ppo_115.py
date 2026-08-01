@@ -1,25 +1,20 @@
 """
-PPO_97 — Experiment 5b: Y-Perturb at 50% Probability
+PPO_115 -- Experiment 24: Adversarial Cursor FROM SCRATCH (Speed Ablation)
 
-Tests the upper bound of perturbation probability. At prob=0.50, scripts face
-~8-9 perturbations per game — the ball is teleported on half of all eligible
-frames. If timed scripts can survive 25% (PPO_96), this tests whether 50%
-crosses the threshold.
+PPO_110 (approach_speed=4.0) achieved 39.4% reversal at 21M. PPO_111 (speed=4
++ push=8 combined) achieved 54.8%. This isolates speed alone at 8.0 to
+determine whether speed scaling accounts for the combined breakthrough.
 
-Hypothesis: at 50% probability, the environment is chaotic enough that NO
-fixed timed sequence consistently works. The only viable strategy is to
-observe ball position each frame and react.
-
-Risk: 50% may be too chaotic for any policy to learn. The cooldown (30 frames)
-guarantees clean trajectory segments between perturbations, but the high
-frequency means the policy experiences teleported ball positions more often
-than clean physics.
+If speed=8 alone hits 55%: push is irrelevant, speed is the sole mechanism.
+If speed=8 plateaus at ~40%: the combined push+speed is the real lever.
 
 Design:
-  - Training:  ALE/Breakout-v5 + Y-perturb (50%/30f/±8px)
-  - Eval/Check: Clean ALE/Breakout-v5 (no perturbation)
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
+              + AdversarialCursorWrapper (approach_speed=8.0)
+  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
+  - FROM SCRATCH (no fork, seed=115)
+  - Target: 5M steps
+  - Standard PPO: NatureCNN, ent_coef=0.006
 """
 import os
 import numpy as np
@@ -32,22 +27,31 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
+from adversarial_cursor_wrapper import AdversarialCursorWrapper
 from autoreset_wrapper import AutoResetWrapper
-from ale_dynamics_randomized import ALEBreakoutDynamicsRandomized
 from run_label_callback import RunLabelCallback
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_97"
+RUN_NAME = "PPO_115"
 TARGET_STEPS = 50_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-BALL_Y_PROB = 0.50
-COOLDOWN = 30
-BALL_Y_RANGE = 8
 ENT_COEF = 0.006
-SEED = 97
+SEED = 115
+
+# approach_speed = 8.0 (4x PPO_107 baseline, 2x PPO_110)
+# Does speed scaling alone replicate PPO_111's 54.8%? Or is push required?
+CURSOR_PARAMS = dict(
+    approach_speed=8.0,
+    tracking_threshold=8,
+    threat_radius=8,
+    warning_frames=5,
+    push_magnitude=4.0,
+    cooldown_frames=60,
+    cursor_size=4,
+)
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -80,18 +84,11 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = ALEBreakoutDynamicsRandomized(
-        env,
-        ball_y_prob=BALL_Y_PROB,
-        ball_x_prob=0.0,
-        paddle_x_prob=0.0,
-        cooldown_frames=COOLDOWN,
-        ball_y_range=BALL_Y_RANGE,
-        seed=SEED,
-    )
+    """Breakout WITH AdversarialCursorWrapper, frameskip=4."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
+    env = AdversarialCursorWrapper(env, **CURSOR_PARAMS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
@@ -100,6 +97,7 @@ def make_training_env():
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -112,6 +110,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -126,11 +125,13 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 5b: Y-Perturb at {BALL_Y_PROB*100:.0f}% Probability")
-    print(f"  Ball Y prob: {BALL_Y_PROB} | Cooldown: {COOLDOWN}f | Range: ±{BALL_Y_RANGE}px")
-    print(f"  Training: ALE + Y-perturb (ball-only dynamics randomization)")
-    print(f"  Eval/Check: Clean ALE (no perturbation)")
-    print(f"  Hypothesis: ~8-9 perturbations/game → NO timed script is viable")
+    pstr = ', '.join(f'{k}={v}' for k, v in CURSOR_PARAMS.items())
+    print(f"{RUN_NAME} -- Experiment 24: Adversarial Cursor FROM SCRATCH (Speed Ablation)")
+    print(f"  Cursor params: {pstr}")
+    print(f"  Key change: approach_speed 2->8 (4x baseline). Does speed alone scale?")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, AdversarialCursorWrapper")
+    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
     print()
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
@@ -141,27 +142,31 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
+    # save_freq empirically corresponds to steps/n_envs (not iterations).
+    # save_freq=156,250 → saves every ~5M steps.
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_97 — Experiment 5b: Y-Perturb at {BALL_Y_PROB*100:.0f}%",
-            f"Cooldown: {COOLDOWN}f | Range: ±{BALL_Y_RANGE}px",
-            f"Training: ALE + Y-perturb dynamics randomization",
-            f"Eval/Check: Clean ALE (no perturbation)",
-            f"Hypothesis: ~8-9 perturbations/game break ALL timed scripts",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_115 -- Experiment 24: Adversarial Cursor FROM SCRATCH (Speed Ablation)",
+            f"Cursor: approach_speed=8.0 (4x baseline, 2x PPO_110)",
+            f"Params: {pstr}",
+            f"Training: ALE/Breakout-v5, fs=4, AdversarialCursorWrapper",
+            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
+            f"Key: from scratch. Does fast cursor force reactivity without pretraining?",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

@@ -1,22 +1,34 @@
 """
-PPO_93 — Experiment 8b: Ball-Hit Reward (2.0/hit, Double)
+PPO_119 -- Experiment 27: Trajectory Entropy (Objective Function Change #2)
 
-Tests whether a hit reward GREATER than the Atari brick score makes
-ball-tracking the dominant optimization objective. Each paddle-ball
-contact is worth 2× a brick break.
+After 120 experiments, no PPO model has ever genuinely generalized. Every
+environment wrapper and perturbation was defeated by the same fundamental
+problem: PPO maximizes E[Σ game_reward], and in deterministic environments
+the expected-return-maximizing policy IS a memorized script.
 
-Makes tracking literally more rewarding than scoring — the hypothesis
-is that the optimizer will prioritize ball contact over brick trajectories.
+This experiment changes the OBJECTIVE, not the environment.
 
-Mode: "hit_double" — +2.0 per detected paddle-ball contact.
-Training: clean ALE/Breakout-v5 (no teleports, no noise).
-Eval/Check: clean ALE/Breakout-v5.
+TrajectoryEntropyWrapper adds a per-step bonus: bonus = scale × (1 - p(action))
+where p(action) is the fraction of parallel envs that took the same action.
+- Script: all 32 envs take same action → p=1.0 → zero bonus
+- Reactive: different ball positions → different actions → p<1.0 → positive bonus
+
+This directly attacks the defining property of a script: identical actions at
+identical timesteps across episodes. A script CANNOT earn the entropy bonus
+because by definition, every env takes the same action at the same step.
+
+PPO now maximizes: E[Σ game_reward + Σ trajectory_bonus]
+
+Key test: eval on CLEAN Breakout (no wrapper). If trajectory entropy baked
+diverse action-selection into the policy, the diversity persists on eval.
 
 Design:
-  - Training:  ALE/Breakout-v5 + BallTrackingReward(hit_only, scale=2.0)
-  - Eval/Check: Clean ALE/Breakout-v5
-  - Standard 4-frame VecFrameStack, NatureCNN, ent_coef=0.006
-  - Target:     50M steps
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv (5 lives)
+              + TrajectoryEntropyWrapper(scale=0.01) at VecEnv level
+  - Eval/Check: Standard Breakout (NO entropy wrapper) -- transfer test
+  - FROM SCRATCH (seed=119)
+  - Target: 25M steps
+  - Standard PPO: NatureCNN, ent_coef=0.006
 """
 import os
 import numpy as np
@@ -30,20 +42,21 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
-from ale_ball_tracking_reward import BallTrackingReward
 from run_label_callback import RunLabelCallback
+from trajectory_entropy_wrapper import TrajectoryEntropyWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_93"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_119"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
-MODE = "hit_double"
-HIT_REWARD = 2.0
 ENT_COEF = 0.006
-SEED = 93
+SEED = 119
+
+# Trajectory entropy -- bonus for taking different actions across parallel envs
+ENTROPY_SCALE = 0.01
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -76,8 +89,8 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Breakout-v5", frameskip=1, repeat_action_probability=0)
-    env = BallTrackingReward(env, mode=MODE, hit_reward=HIT_REWARD, seed=SEED)
+    """Standard Breakout. TrajectoryEntropyWrapper added at VecEnv level."""
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
     env = EpisodicLifeEnv(env)
@@ -88,6 +101,7 @@ def make_training_env():
 
 
 def make_eval_env():
+    """Standard Breakout WITHOUT entropy wrapper -- transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -100,6 +114,7 @@ def make_eval_env():
 
 
 def make_check_env():
+    """Standard Breakout WITHOUT entropy wrapper -- memcheck on clean physics."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -114,41 +129,50 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 8b: Ball-Hit Reward ({HIT_REWARD}/hit, Double)")
-    print(f"  Mode: {MODE} | Hit reward: {HIT_REWARD}")
-    print(f"  Training: Clean ALE + double ball-hit auxiliary reward")
-    print(f"  Eval/Check: Clean ALE (no auxiliary reward)")
-    print(f"  Hypothesis: 2× hit makes tracking MORE rewarding than scoring")
+    print(f"{RUN_NAME} -- Experiment 27: Trajectory Entropy")
+    print(f"  Mechanism: cross-env action-diversity bonus")
+    print(f"  Scale: {ENTROPY_SCALE} (max bonus per step)")
+    print(f"  Formula: bonus = {ENTROPY_SCALE} × (1 - p(action_across_envs))")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv")
+    print(f"           + TrajectoryEntropyWrapper at VecEnv level")
+    print(f"  Eval/Check: Standard Breakout (NO wrapper) -- transfer test")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Entropy coef: {ENT_COEF}")
+    print(f"  Hypothesis: trajectory entropy forces argmax action diversity")
     print()
 
+    # Build VecEnv: envs → FrameStack → TrajectoryEntropy
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
+    env = TrajectoryEntropyWrapper(env, entropy_scale=ENTROPY_SCALE)
 
     eval_env = DummyVecEnv([make_eval_env])
     eval_env = VecFrameStack(eval_env, n_stack=4)
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_93 — Experiment 8b: Ball-Hit Reward ({HIT_REWARD}/hit, Double)",
-            f"Mode: {MODE} | Training: clean ALE + 2× hit aux reward",
-            f"Eval/Check: clean ALE (no auxiliary reward)",
-            f"Hypothesis: 2× hit makes tracking MORE rewarding than scoring",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_119 -- Experiment 27: Trajectory Entropy",
+            f"Mechanism: cross-env action-diversity bonus (scale={ENTROPY_SCALE})",
+            f"Training: ALE/Breakout-v5 + TrajectoryEntropyWrapper",
+            f"Eval/Check: Standard Breakout (NO wrapper) -- transfer test",
+            f"Hypothesis: trajectory entropy forces argmax action diversity",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:
