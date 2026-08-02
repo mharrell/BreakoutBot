@@ -104,7 +104,24 @@ PPO_124 training continues as PPO_126, identical parameters, from 25M → 50M to
 
 **Question:** does more training further improve clean-eval transfer, or does the policy eventually converge to a script that maximizes both game reward and proximity bonus simultaneously?
 
-Status: Training (launched 2026-07-31).
+**Result (August 2, 2026): THE MODEL REGRESSED.** The best checkpoint was at 47.4M, not 50M:
+
+| Checkpoint | Layout | px_corr | ALT Score | Pattern |
+|-----------|--------|---------|-----------|---------|
+| best (47.4M) | RIGHT_HALF | **0.33** | 223 (55%) | **Decoupled** — paddle trajectories diverge |
+| best (47.4M) | LEFT_HALF | 0.97 | 403 (100%) | Script — identical to FULL |
+| best (47.4M) | RANDOM_50 | mixed | mixed | 16 script, 4 decoupled |
+| final (50M) | ALL | 0.95 | 401 (100%) | Single script everywhere |
+
+The best checkpoint showed layout-specific decoupling: right-half cleared broke the script, left-half didn't. By 50M, this disappeared — single 401-point script on all layouts.
+
+**Intervention gradient (50M final):** AUC = 0.327 vs PPO_124's 0.421. Noisy curve, no clean peak. Textbook F-025: intervention probe classified every magnitude "STRONG reactivity" while split-watcher confirmed memorized script.
+
+**Training duration:** ~6.5 hours for 25M steps (avg 1,084 FPS on RTX 3060 Ti).
+
+**Conclusion:** More training does NOT monotonically improve reactivity. PPO eventually finds a script that maximizes the combined game + proximity objective. Checkpoint selection is critical — save frequently and verify with split-watcher.
+
+Full results: see EXPERIMENTS.md Experiment 33.
 
 ---
 
@@ -181,7 +198,7 @@ Every metric in the project's diagnostic suite measures the **policy distributio
 |-------|--------|-------|------|--------------------|--------------------------|------------------|---------|
 | PPO_124 best | ProximityReward(0.05,80) | 19.2M | 379 | **0/60** | **100%** | 0.240 | **REACTIVE** |
 | PPO_124 final | ProximityReward(0.05,80) | 25M | 383 | **0/60** | **100%** | 0.421 | **REACTIVE** |
-| PPO_126 | Continue PPO_124 25→50M | training | — | — | — | — | Pending |
+| PPO_126 | Continue PPO_124 25→50M | 50M | 401 | **0/60** | **100%** (px_corr=0.95) | 0.327 (noisy) | REGRESSED — best at 47.4M |
 
 Full diagnostic report: `FINDINGS_PPO_124_BREAKTHROUGH.md`
 
@@ -284,9 +301,7 @@ PPO_107–110, PPO_113: not split-watcher tested (dead or early-stage).
 
 ## What's Running
 
-- **PPO_126** — Continue PPO_124 (Proximity Reward) from 25M → 50M. Same params. No memcheck callback. Launched 2026-07-31.
-
-All cursor models (PPO_107-117), BeamRider models, PPO_118, PPO_119-125 are complete and verified — see Model Roster above.
+**Nothing currently training.** All models complete and verified — see Model Roster above. PPO_126 completed August 2, 2026 (REGRESSED).
 
 ---
 
@@ -294,7 +309,7 @@ All cursor models (PPO_107-117), BeamRider models, PPO_118, PPO_119-125 are comp
 
 - **Can the argmax ever be reactive in ANY Atari game? ANSWERED (YES):** PPO_124 demonstrates verified argmax reactivity on Breakout. The key is reward shaping — directly rewarding the desired behavior — not environment engineering.
 
-- **Does more training improve or degrade reactivity?** PPO_126 (25M → 50M) will answer this. The final model at 25M is better than the best model at 19.2M on every metric. Does this trend continue, plateau, or reverse?
+- **Does more training improve or degrade reactivity? ANSWERED (REGRESSED):** PPO_126 continued PPO_124 from 25M → 50M. Reactivity degraded — the best checkpoint was at 47.4M (partial layout-specific decoupling), the final at 50M was a memorized script (px_corr=0.95). More training does NOT monotonically improve reactivity. Checkpoint selection is critical.
 
 - **Does the proximity reward approach generalize to other Atari games?** The mechanism (dense reward for ball/paddle proximity) is Breakout-specific, but the principle (reward what you want directly) should transfer. Space Invaders: reward horizontal alignment with enemies? BeamRider: reward being out of the line of fire?
 
@@ -313,6 +328,6 @@ All cursor models (PPO_107-117), BeamRider models, PPO_118, PPO_119-125 are comp
 | `proximity_reward_wrapper.py` | The wrapper that made it work — 3-line reward function |
 | `DIAGNOSTIC_IDEAS.md` | Reference for building new diagnostics |
 | `LOGICAL_AUDIT.md` | 17-entry logical flaw catalog |
-| `FLAWS.md` | 23-entry methodological flaw catalog |
+| `FLAWS.md` | 28-entry methodological flaw catalog |
 | `EXPERIMENTS.md` | Full experiment writeup |
 | `RL_REFERENCE.md` | PPO parameter guide, metric diagnostics, 31+ lessons |

@@ -1782,7 +1782,7 @@ This was the last environment-modification experiment. After 120 attempts, every
 
 ---
 
-## Experiment 27: Trajectory Entropy — PPO_119 (ACTIVE — launched July 31, 2026)
+## Experiment 27: Trajectory Entropy — PPO_119 (KILLED — DEAD at 7M, SINGLE_SCRIPT)
 
 **Goal:** Change PPO's objective function to directly penalize the defining property of a script: identical actions at identical timesteps across episodes.
 
@@ -1864,9 +1864,13 @@ If still memorized (split-watcher shows perfect transfer):
 
 `trajectory_entropy_wrapper.py`, `train_ppo_119.py`
 
+### Result (August 1, 2026)
+
+**KILLED at 7M steps.** SINGLE_SCRIPT from the start — every checkpoint produced exactly 1 unique score on det=True eval. The trajectory entropy bonus (scale=0.01) was too weak to overcome the fundamental incentive: in a deterministic environment, identical actions across parallel environments at matched timesteps IS the optimal strategy. Same objective-function approach as Experiment 19 (ent_coef sweep), same result. PPO_121 (scale=0.10) killed even earlier at 2M — higher scale made learning impossible rather than preventing memorization.
+
 ---
 
-## Experiment 28: Moving Bumper Obstacles — PPO_120 (ACTIVE — launched July 31, 2026)
+## Experiment 28: Moving Bumper Obstacles — PPO_120 (COMPLETED — MEMORIZED at 25M, SINGLE_SCRIPT)
 
 **Goal:** Force reactivity by introducing indestructible, randomly-repositioning brick obstacles that change the playfield geometry — not just ball position or action noise.
 
@@ -1936,3 +1940,215 @@ If still memorized:
 ### Scripts Created
 
 `moving_bumper_wrapper.py`, `train_ppo_120.py`
+
+### Result (August 1, 2026)
+
+**MEMORIZED at 25M steps.** SINGLE_SCRIPT on det=True eval. Despite 1,500 possible bumper configurations with random repositioning every 120-300 frames, PPO found a bumper-robust script. The split-watcher confirmed memorization. The bumper fundamentally changes geometry mid-game — if even this doesn't force reactivity, the only remaining lever is the objective function (reward shaping). This finding directly motivated Experiment 31 (PPO_124: proximity reward).
+
+---
+
+## Experiment 29: Trajectory Entropy Variants — PPO_121, PPO_122 (DEAD / MEMORIZED)
+
+**Goal:** Test whether the trajectory entropy approach (Experiment 27) fails only at low scale, or whether the concept itself is flawed.
+
+**PPO_121:** Trajectory entropy at scale=0.10 (10× PPO_119). Killed at **2M steps** — SINGLE_SCRIPT from the start. Higher scale made learning impossible rather than preventing memorization. The bonus noise overwhelmed the game reward signal.
+
+**PPO_122:** Ball-binned trajectory entropy — reward action diversity *conditioned on ball position* (LEFT/CENTER/RIGHT bins). Same cross-env bonus within each ball-position bin. Completed 25M steps. **SINGLE_SCRIPT, 123 pts.** MEMORIZED. Timing offsets between parallel environments produced false diversity signals across bins — same confound as Experiment 18 (ball-binned entropy).
+
+**Conclusion:** Trajectory entropy cannot prevent memorization. At low scale, scripts still dominate. At high scale, learning fails. Conditioning on ball position doesn't help — timing offsets produce the same false diversity as ever.
+
+### Scripts Created
+
+`trajectory_entropy_wrapper.py` (modified), `train_ppo_121.py`, `train_ppo_122.py`
+
+---
+
+## Experiment 30: Extreme Bumper — PPO_123 (MEMORIZED)
+
+**Goal:** Push the moving bumper concept to its limit — two independent bumpers with 3+ brick shapes each, repositioning independently at different intervals.
+
+Completed 25M steps. **SINGLE_SCRIPT, 72 pts.** MEMORIZED. Even with two bumpers creating geometrically complex and unpredictable playfields, PPO found a script that scored consistently. 72 pts is lower than PPO_120's score (since the playfield is harder), but it's still a script.
+
+**Implication:** Environment engineering has a hard ceiling. No amount of geometric complexity forces reactivity — PPO always finds the script that maximizes expected return under whatever constraints exist. The fix must come from the objective function.
+
+### Scripts Created
+
+`train_ppo_123.py` (uses `moving_bumper_wrapper.py` with dual-bumper config)
+
+---
+
+## Experiment 31: Proximity Reward — PPO_124 (REACTIVE — BREAKTHROUGH)
+
+**Goal:** Stop trying to penalize scripts and instead directly reward the behavior we want: the paddle tracking the ball.
+
+**Hypothesis:** Every previous experiment tried to make scripts non-viable by modifying the environment or adding penalties. But in a deterministic environment, `argmax_π E[Σ rewards]` always converges to a script because scripts maximize expected return. The fix: change what "expected return" means. Reward ball-tracking directly, and ball-tracking becomes the optimum.
+
+### Design
+
+**ProximityRewardWrapper:** Reads RAM 72 (paddle_x), 99 (ball_x), 101 (ball_y). When ball_y > 100 (descending), adds a proximity bonus:
+
+```python
+distance = abs(paddle_x - ball_x)
+bonus = 0.05 * max(0.0, 1.0 - distance / 80.0)
+reward += bonus
+```
+
+Three lines. A reward of up to 0.05 per frame — twenty frames of perfect tracking equals one yellow brick. On ~2,000 descent frames per game, perfect tracking earns ~50 bonus points (5-10% of game score).
+
+**Key design decisions:**
+- **Scale 0.05:** Small enough not to overwhelm game reward (1.0-7.0 per brick), large enough to matter over thousands of frames
+- **Max distance 80px:** Covers the full 160px playfield; bonus linearly decays from paddle center
+- **Descend threshold ball_y > 100:** Only rewards tracking when the ball is coming toward the paddle — not during ascent when the paddle can't reach it
+- **Reward is added, not substituted:** `reward += bonus` — game rewards still flow through
+- **Training only:** Eval and memcheck use clean Breakout (no wrapper) — this is the transfer test
+
+### Training Config
+
+| Parameter | Value |
+|-----------|-------|
+| RUN_NAME | PPO_124 |
+| SEED | 124 |
+| Architecture | NatureCNN |
+| Envs | 32 |
+| n_steps | 128 |
+| batch_size | 1024 |
+| n_epochs | 4 |
+| gamma | 0.99 |
+| ent_coef | 0.006 |
+| TARGET_STEPS | 25,000,000 |
+| Training env | ALE/Breakout-v5 + ProximityRewardWrapper(scale=0.05, max_dist=80, descend=100) |
+| Eval/Check env | **Clean Breakout (NO wrapper)** — transfer test |
+| FROM SCRATCH | Yes |
+
+### Results
+
+**Split-watcher — No-timing variant (zero timing confound):**
+
+| Checkpoint | Games | Perfect Transfers | ALT Retention | Action Divergence |
+|-----------|-------|-------------------|---------------|-------------------|
+| best (19.2M) | 60 | **0** | **100%** | 62.4% |
+| final (25M) | 60 | **0** | **100%** | 62.9% |
+
+**Split-watcher — With NoopResetEnv (0-30 frame timing offset):**
+
+| Checkpoint | Games | Perfect Transfers | ALT Retention |
+|-----------|-------|-------------------|---------------|
+| best (19.2M) | 60 | **0** | 46% |
+| final (25M) | 60 | **0** | 59% |
+
+**Combined: 0/240 perfect transfers.** The model clears every brick on every layout in the no-timing variant — 120/120 games. With timing noise, retention drops to 46-59% (frame-stack corruption on first serve), but still zero perfect transfers at either checkpoint.
+
+**Intervention Gradient (dose-response curve):**
+
+| Magnitude | Dead Baseline | PPO_124 best | PPO_124 final |
+|-----------|:---:|:---:|:---:|
+| ±0 px | 0.0% | — | 37.5% |
+| ±8 px | 0.0% | — | 41.2% |
+| ±15 px | 0.0% | — | **60.0%** |
+| ±30 px | 0.0% | — | 50.0% |
+| ±45 px | 0.0% | — | 31.2% |
+| ±60 px | 0.0% | — | 25.0% |
+| **AUC** | 0.000 | 0.240 | **0.421** |
+
+Clean dose-response: peaks at moderate displacement (the ball moved → 60% reversal), declines smoothly at extreme displacement (ball in physically impossible position → 25%). AUC 0.421 classified as STRONG. Dead baseline: 0.0% at all magnitudes.
+
+**Memorization check (det=True, clean eval):**
+
+| Checkpoint | Unique Scores | Best Score | Verdict |
+|------------|:---:|:---:|---------|
+| 1M | 1 | 16 | SINGLE_SCRIPT |
+| 5M | 1 | 37 | SINGLE_SCRIPT |
+| 10M | 1 | 78 | SINGLE_SCRIPT |
+| 14M | **4** | **87** | **MULTIPLE_SCRIPTS** |
+| 19M | 2 | 107 | SINGLE_SCRIPT |
+| 25M | **4** | 93 | **MULTIPLE_SCRIPTS** |
+
+First model in project history to sustain MULTIPLE_SCRIPTS on det=True without sticky masking (10 of last 12 checkpoints from 14M-25M). Stoch best of 216 is the highest score ever recorded on clean Breakout in this project.
+
+### Why It Worked
+
+Every previous approach tried to change the **viability of scripts** — make the environment stochastic so scripts fail. PPO always found a script that survived: timing-robust, layout-conditioned, noise-tolerant. The optimum was always a script — only the shape changed.
+
+Proximity reward changes **what the optimum is.** A center-hold script gets incidental proximity bonus when the ball happens to pass near center. A reactive tracker gets the maximum bonus on every descent frame — 3-5× more over a full game. There's no script that can fake being close to the ball.
+
+The bonus is dense (every frame) while game rewards are sparse (bricks break every few seconds). Dense rewards provide better gradients for credit assignment. The model doesn't need to discover the chain "track → hit → score."
+
+### Significance
+
+This is the first verified reactive PPO argmax on Atari Breakout in 124 experiments spanning:
+- Sticky actions (p=0.25, confirmed memorization masker by Zhang et al. 2018)
+- Cursor wrappers (13 variants — shaped distribution, not argmax)
+- Entropy bonuses (0.006-0.10 — widened distribution, didn't shift mode)
+- Frame skip, dynamics randomization, random bricks (CNN conditioned on pattern)
+- Trajectory entropy (script IS the cross-env optimum)
+- Moving bumpers (15+ shapes, 1-2 independent — PPO finds bumper-robust script)
+- Auxiliary ball-position supervision (CNN tracks ball at 1.9px, policy ignores features)
+
+**The core insight:** PPO's objective function was the root cause all along. `argmax_π E[Σ rewards]` in a deterministic environment converges to a script. Reward what you want, don't penalize what you don't want.
+
+### Verification Checklist
+
+- [x] Split-watcher no-timing: 0/120 perfect transfers, 100% ALT retention
+- [x] Split-watcher with NoopResetEnv: 0/120 perfect transfers
+- [x] Intervention gradient: AUC 0.421, clean dose-response curve
+- [x] Dead baseline calibration: 0.0% reversal at all magnitudes
+- [x] Brick layout transfer: clears every layout, every game (no-timing)
+- [x] Clean eval transfer: 216 stoch best, MULTIPLE_SCRIPTS on det=True
+- [x] No confounds: BrickClearWrapper bug fixed, NoopResetEnv controlled for
+
+### Scripts Created
+
+`proximity_reward_wrapper.py`, `train_ppo_124.py`
+
+Full report: `FINDINGS_PPO_124_BREAKTHROUGH.md`
+
+---
+
+## Experiment 32: Brick Pre-clear + One-Life — PPO_125 (MEMORIZED)
+
+**Goal:** Combine two previously-tested approaches (brick pre-clearing from PPO_116, one-life training from PPO_104) to see if the combination forces reactivity where each individually failed.
+
+Completed 25M steps. **SINGLE_SCRIPT, 73 pts.** MEMORIZED. The combination of brick randomization at reset and life-loss penalty didn't prevent memorization — PPO conditioned on the initial brick layout and played a layout-conditioned script, same as PPO_116.
+
+### Scripts Created
+
+`train_ppo_125.py`
+
+---
+
+## Experiment 33: Proximity Reward Continuation — PPO_126 (REGRESSED)
+
+**Goal:** Test whether extending PPO_124's training from 25M → 50M further improves transfer performance and reactivity.
+
+**Config:** Identical to PPO_124. Continue from final_model.zip at 25M using `remaining = 50M - model.num_timesteps`. No MemorizationCheckCallback (removed — split-watcher is definitive).
+
+### Results (August 2, 2026)
+
+**The model regressed.** The best checkpoint was at 47.4M, not 50M:
+
+**Split-watcher — No-timing variant:**
+
+| Checkpoint | Layout | px_corr | ALT Score | Pattern |
+|-----------|--------|---------|-----------|---------|
+| best (47.4M) | RIGHT_HALF | **0.33** | 223 (55%) | Decoupled — paddle trajectories diverge |
+| best (47.4M) | LEFT_HALF | 0.97 | 403 (100%) | Script — identical to FULL |
+| best (47.4M) | RANDOM_50 | mixed | mixed | 16 script, 4 decoupled |
+| final (50M) | ALL | 0.95 | 401 (100%) | Single script everywhere |
+
+The best checkpoint showed layout-specific decoupling: clearing right-half bricks broke the script, clearing left-half didn't (asymmetric dependency on brick positions). By 50M, this behavior disappeared entirely — the model converged to a single 401-point script with px_corr=0.95 on all layouts.
+
+**Intervention gradient (50M final):**
+
+AUC = 0.327 (vs PPO_124's 0.421). Noisy curve — no clean peak. The intervention probe classified every magnitude as "STRONG reactivity" while the split-watcher confirmed a memorized script — a textbook F-025 demonstration (intervention probe measures distribution shifts, not argmax changes).
+
+**Training duration:** 25M steps in ~6.5 hours on RTX 3060 Ti (avg ~1,084 FPS).
+
+### Conclusion
+
+More training does NOT monotonically improve reactivity. PPO's optimizer eventually finds a script that maximizes the combined game + proximity objective. The proximity reward delays script convergence but doesn't prevent it indefinitely. The best checkpoint (47.4M) was reactive on specific layouts; the final checkpoint (50M) was not.
+
+This suggests a **checkpoint selection strategy** is critical for proximity-reward models: save frequently, verify each checkpoint with split-watcher, and select the one that maximizes both score and layout transfer — not just the latest checkpoint.
+
+### Scripts Created
+
+`train_ppo_126.py`

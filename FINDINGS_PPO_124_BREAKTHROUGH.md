@@ -53,8 +53,8 @@ Every prior anti-memorization method tried to force reactivity **indirectly**:
 | Approach | Mechanism | Why It Failed |
 |----------|-----------|---------------|
 | Sticky actions | Random action noise | Breakout is forgiving — scripts survive p=0.25 noise. Dead policy + noise = 8–14 "unique" scores (F-001) |
-| Cursor wrapper | Penalize paddle-ball distance | PPO hedged: reactive distribution, memorized argmax. Distribution-vs-argmax confound (F-006) |
-| Entropy bonus | Reward diverse action distributions | Entropy can come from anywhere — doesn't require ball-tracking (F-003) |
+| Cursor wrapper | Penalize paddle-ball distance | PPO hedged: reactive distribution, memorized argmax. Distribution-vs-argmax confound (F-025/F-026) |
+| Entropy bonus | Reward diverse action distributions | Entropy can come from anywhere — doesn't require ball-tracking. Every ent_coef 0.006–0.10 → SINGLE_SCRIPT (RL_REFERENCE.md #43) |
 | Frame skip | Unpredictable observation timing | CNN conditions on skip pattern; PPO finds a skip-conditioned script (PPO_33) |
 | Randomized bricks | Different layout each episode | CNN conditions on first-frame pixels; PPO finds a layout-conditioned script |
 | Dynamics randomization | Varying physics per episode | Same — conditioned on first frames, not reactive |
@@ -180,12 +180,12 @@ MemorizationCheckCallback is **removed** from PPO_126 — memcheck verdicts are 
 
 ## Verification Checklist
 
-- [ ] Split-watcher with FIXED BrickClearWrapper on PPO_124 best_model (19.2M) — 0/12 perfect transfers expected
-- [ ] Split-watcher with FIXED BrickClearWrapper on PPO_124 final_model (25M)
-- [ ] No-timing split-watcher (no NoopResetEnv) on both checkpoints
-- [ ] Intervention gradient on both checkpoints — expect HIGH reversal rate (not just distribution shift, actual argmax reversal)
-- [ ] PPO_126 memcheck track at 30M, 35M, 40M, 45M, 50M
-- [ ] Split-watcher on PPO_126 final at 50M
+- [x] Split-watcher with FIXED BrickClearWrapper on PPO_124 best_model (19.2M) — **0/60 perfect transfers, 100% ALT retention**
+- [x] Split-watcher with FIXED BrickClearWrapper on PPO_124 final_model (25M) — **0/60 perfect transfers, 100% ALT retention**
+- [x] No-timing split-watcher (no NoopResetEnv) on both checkpoints — **0/120 perfect transfers, clears every layout every game**
+- [x] Intervention gradient on both checkpoints — **AUC 0.240 (best) / 0.421 (final), clean dose-response peaking at 15px (60% reversal)**
+- [ ] PPO_126 memcheck track (callback removed — N/A)
+- [x] Split-watcher on PPO_126 final at 50M — **REGRESSED, single script px_corr=0.95**
 - [ ] **Acid test:** record a full split-watcher game with `--record`. Show the paddle moving to different positions on the two sides in the same frame. This is the definitive visual proof.
 - [ ] Clean eval at 10k games for statistical significance
 - [ ] nosticky verification on clean Breakout (should be unnecessary — no sticky actions in training — but verify for completeness)
@@ -213,4 +213,4 @@ MemorizationCheckCallback is **removed** from PPO_126 — memcheck verdicts are 
 - `train_ppo_126.py` — continuation (25M → 50M)
 - `FINDINGS_2026_07_30.md` — split-watcher verification of all cursor models (all memorized)
 - `CURRENT_STATE.md` — project status board (needs update)
-- `FLAWS.md` — F-005 (memcheck false positives), F-006 (distribution-vs-argmax confound)
+- `FLAWS.md` — F-024 (memcheck false positives), F-025/F-026 (distribution-vs-argmax confound), F-028 (BrickClearWrapper bug)

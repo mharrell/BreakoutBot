@@ -433,9 +433,29 @@ The previous MULTIPLE_SCRIPTS verdicts were the same confound as Breakout (F-024
 
 **Lesson:** The distribution-vs-argmax confound is universal — it affects Breakout AND BeamRider. The "adversarial threat forces reactivity" hypothesis is falsified: PPO learns to hedge (reactive distribution + script argmax) in BeamRider the same way it does in Breakout. PPO's objective maximizes expected return; when a fixed sequence is viable, the argmax converges to it regardless of game mechanics.
 
-After 117 Breakout + 2 BeamRider experiments, no PPO model in this project's history has ever produced a verified reactive argmax.
+After 117 Breakout + 2 BeamRider experiments, no PPO model in this project's history had ever produced a verified reactive argmax — until PPO_124 (proximity reward), documented August 1, 2026. See F-028 and EXPERIMENTS.md Experiment 31.
 
 **Status:** FALSIFIED. Both BeamRider models are memorized SINGLE_SCRIPT. The split-watcher is now the only trusted reactivity diagnostic for any Atari game.
+
+---
+
+### F-028: BrickClearWrapper had a stale-observation bug that invalidated prior split-watcher data — **CONFIRMED (2026-08-01)**
+
+**Severity:** HIGH
+
+**Affected conclusion:** All split-watcher results using the buggy `BrickClearWrapper` that did not take a NOOP step after clearing bricks on reset.
+
+**Description:** The `BrickClearWrapper` in both the BreakoutBot split-watcher and the breakout-reactive-ppo `verify_split_watcher.py` called `setRAM()` to clear bricks, then returned the observation from `env.reset()` — which was captured BEFORE the brick-clearing RAM writes. Both sides saw identical full-wall first frames, masking early divergence between FULL and ALT layouts. This created false "perfect transfer" verdicts by hiding the critical frames where a reactive policy would diverge.
+
+The bug was in both scripts from their creation (July 30) until the fix on August 1, 2026. The fix: add `obs, _, _, _, _ = self.env.step(0)` after clearing bricks to refresh the observation.
+
+**Affected models:** PPO_111-118, BeamRider BASELINE and MULTILIFE. All cursor-model split-watcher data (1-2/9 perfect transfers) and BeamRider data (0-2/10 perfect transfers) was collected with the buggy wrapper. After fix, re-tests on PPO_114/115/116/126 showed 0/60 perfect transfers on all models — the bug didn't change any verdicts (all remain MEMORIZED), but it introduced methodological uncertainty that required re-verification of every model.
+
+**The BrickClearWrapper bug is independent of the distribution-vs-argmax confound (F-025/F-026).** Even with a perfect observation pipeline, cursor models remain memorized — the cursor shapes the distribution, not the argmax.
+
+**Lesson:** Wrapper observation bugs are pernicious because they produce clean-looking data that passes sanity checks. Always verify that the first-frame observation reflects the actual game state after wrapper modifications. A simple `assert ram_state_matches_observation()` at reset would have caught this.
+
+**Status:** CONFIRMED. Bug identified and fixed August 1, 2026. All affected models re-tested August 2, 2026. No verdicts changed.
 
 ---
 
@@ -470,3 +490,4 @@ After 117 Breakout + 2 BeamRider experiments, no PPO model in this project's his
 | **F-025** | **CRITICAL** | **PPO_107 has verifiable ball-tracking (33% reversal)** | **CONFIRMED 2026-07-30 — intervention probe measures distribution shifts, not argmax changes. All cursor models memorized.** |
 | **F-026** | **CRITICAL** | **Any future claim of argmax reactivity in Breakout** | **CONFIRMED 2026-07-30 — perfect transfer on altered layout = definitive memorization. Split-watcher is standard gate.** |
 | **F-027** | **CRITICAL** | **BeamRider is the first verified reactive PPO argmax** | **FALSIFIED 2026-07-30 — both BeamRider models SINGLE_SCRIPT (std=0.0, unique=1) under split-watcher. Same distribution-vs-argmax confound.** |
+| **F-028** | **HIGH** | **All split-watcher results PPO_111-118, BeamRider (July 30 – Aug 1)** | **CONFIRMED 2026-08-01 — BrickClearWrapper stale-observation bug. Both sides saw identical full-wall first frames. Fixed: NOOP step after clearing bricks. Re-tests completed Aug 2 — no verdicts changed, all models remain MEMORIZED.** |
