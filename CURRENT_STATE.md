@@ -307,7 +307,7 @@ PPO_107–110, PPO_113: not split-watcher tested (dead or early-stage).
 
 ## Open Questions
 
-- **Can the argmax ever be reactive in ANY Atari game? ANSWERED (YES):** PPO_124 demonstrates verified argmax reactivity on Breakout. The key is reward shaping — directly rewarding the desired behavior — not environment engineering.
+- **Can the argmax ever be reactive in ANY Atari game? ANSWERED (YES):** PPO_124 demonstrates verified argmax reactivity on Breakout. The key is directly rewarding the desired behavior — not environment engineering.
 
 - **Does more training improve or degrade reactivity? ANSWERED (REGRESSED):** PPO_126 continued PPO_124 from 25M → 50M. Reactivity degraded — the best checkpoint was at 47.4M (partial layout-specific decoupling), the final at 50M was a memorized script (px_corr=0.95). More training does NOT monotonically improve reactivity. Checkpoint selection is critical.
 
