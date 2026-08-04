@@ -1,32 +1,22 @@
 """
-PPO_107 — Experiment 16: Adversarial Cursor (visible secondary agent)
+PPO_131 — Experiment 35a: Proximity Reward Linear Annealing
 
-After 106 experiments, PPO always memorizes in deterministic non-adversarial
-environments. BeamRider proved adversarial entities with agency force reactivity.
-This experiment ports the mechanism directly: a visible cursor that has its own
-state machine, approaches the ball when the paddle isn't tracking, and attacks
-(pushes the ball) if the paddle doesn't react.
+Scale decays linearly from 0.05 to 0.0 over 25M steps. Tests whether
+establishing ball-tracking early (when scale is high) then removing the
+proximity bonus prevents the oscillation between reactive and script basins.
 
-The key innovation over PPO_105/106: the threat is a VISIBLE ENTITY WITH AGENCY.
-The cursor moves across the screen, the agent sees it, and has warning frames
-to react before the attack hits. This mirrors BeamRider's fundamental structure:
-visible enemies → threat perception → evasive action → survival.
-
-When the paddle tracks the ball, the cursor retreats and stays hidden. This
-creates a natural reward gradient: track the ball → cursor stays away → score.
-Don't track → cursor attacks → ball dodges → miss → lower score.
-
-The cursor is only visible during THREATENING and ATTACK states. During
-APPROACHING and COOLDOWN, it's invisible — the observation looks identical
-to standard Breakout. This means in eval (standard Breakout, no wrapper),
-there's no missing cursor because tracking keeps a hidden cursor at bay.
+Hypothesis: early tracking gets baked into the policy structure before the
+game-reward gradient can pull it into a script basin. Without the proximity
+bonus in later training, the model focuses purely on brick-clearing while
+retaining the tracking behavior it learned early.
 
 Design:
-  - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
-              + AdversarialCursorWrapper (visible stateful adversary)
-  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
+  - Training: ALE/Breakout-v5 + AnnealingProximityRewardWrapper(0.05→0.0)
+  - Eval/Check: Standard Breakout (NO proximity reward) — transfer test
+  - FROM SCRATCH (seed=131)
+  - Target: 25M steps
+  - Scale: linear_schedule(0.05, 0.0) via progress_remaining
   - Standard PPO: NatureCNN, ent_coef=0.006
-  - Target: 50M steps (kill at 10M if SINGLE_SCRIPT at every checkpoint)
 """
 import os
 import numpy as np
@@ -34,35 +24,29 @@ import glob
 import cv2
 import gymnasium as gym
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
-from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
+from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack, VecEnv
+from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList, BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
-from adversarial_cursor_wrapper import AdversarialCursorWrapper
 from autoreset_wrapper import AutoResetWrapper
 from run_label_callback import RunLabelCallback
+from annealing_proximity_wrapper import AnnealingProximityRewardWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_107"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_131"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 ENT_COEF = 0.006
-SEED = 107
+SEED = 131
 
-# Cursor wrapper params (from calibration defaults)
-CURSOR_PARAMS = dict(
-    approach_speed=2.0,
-    tracking_threshold=8,
-    threat_radius=8,
-    warning_frames=5,
-    push_magnitude=4.0,
-    cooldown_frames=60,
-    cursor_size=4,
-)
+PROXIMITY_MAX_DIST = 80.0
+PROXIMITY_DESCEND_THRESHOLD = 100
+INITIAL_SCALE = 0.05
+FINAL_SCALE = 0.0
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -94,23 +78,51 @@ def get_latest_checkpoint(path):
     return max(checkpoints, key=os.path.getmtime)
 
 
+class ScaleUpdateCallback(BaseCallback):
+    """Updates the wrapper's progress_remaining on each rollout end."""
+    def __init__(self, target_steps):
+        super().__init__()
+        self._target = target_steps
+
+    def _on_step(self):
+        progress = 1.0 - (self.model.num_timesteps / self._target)
+        progress = max(0.0, min(1.0, progress))
+        # Update all envs in the VecEnv
+        env = self.model.get_env()
+        if hasattr(env, 'envs'):
+            for e in env.envs:
+                self._update_wrappers(e, progress)
+        elif hasattr(env, 'unwrapped'):
+            self._update_wrappers(env, progress)
+        return True
+
+    def _update_wrappers(self, env, progress):
+        while env is not None:
+            if isinstance(env, AnnealingProximityRewardWrapper):
+                env.progress_remaining = progress
+            env = getattr(env, 'env', None)
+
+
 def make_training_env():
-    """Breakout WITH AdversarialCursorWrapper, frameskip=4."""
+    """Breakout + annealing proximity reward."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
-    # Cursor wrapper AFTER FireResetEnv, BEFORE Grayscale/ClipReward
-    # (needs RGB observation to draw cursor + ALE for setRAM)
-    env = AdversarialCursorWrapper(env, **CURSOR_PARAMS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
+    scale_fn = lambda p: FINAL_SCALE + (INITIAL_SCALE - FINAL_SCALE) * p
+    env = AnnealingProximityRewardWrapper(
+        env, scale_schedule=scale_fn,
+        max_distance=PROXIMITY_MAX_DIST,
+        descend_threshold=PROXIMITY_DESCEND_THRESHOLD,
+    )
     env = Monitor(env)
     return env
 
 
 def make_eval_env():
-    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
+    """Standard Breakout WITHOUT proximity reward — transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -123,7 +135,7 @@ def make_eval_env():
 
 
 def make_check_env():
-    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
+    """Standard Breakout WITHOUT proximity reward."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -138,17 +150,15 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    pstr = ', '.join(f'{k}={v}' for k, v in CURSOR_PARAMS.items())
-    print(f"{RUN_NAME} -- Experiment 16: Adversarial Cursor (visible secondary agent)")
-    print(f"  Cursor params: {pstr}")
-    print(f"  State machine: APPROACHING (inv) -> THREATENING (vis, {CURSOR_PARAMS['warning_frames']}f warn)")
-    print(f"                 -> ATTACK (vis, +/-{CURSOR_PARAMS['push_magnitude']}px push)")
-    print(f"                 -> COOLDOWN (inv, {CURSOR_PARAMS['cooldown_frames']}f) -> respawn")
-    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, AdversarialCursorWrapper")
-    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
-    print(f"  Key innovation: visible agent with agency. Cursor is only visible")
-    print(f"    during THREATENING/ATTACK. Tracking paddle keeps cursor hidden.")
+    print(f"{RUN_NAME} — Experiment 35a: Proximity Reward Linear Annealing")
+    print(f"  Scale: {INITIAL_SCALE} -> {FINAL_SCALE} over {TARGET_STEPS:,} steps")
+    print(f"  Max distance: {PROXIMITY_MAX_DIST}, Threshold: ball_y > {PROXIMITY_DESCEND_THRESHOLD}")
+    print(f"  Training: ALE/Breakout-v5 + AnnealingProximityRewardWrapper")
+    print(f"  Eval/Check: Standard Breakout (NO proximity reward)")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
     print()
+
+    os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
@@ -161,11 +171,8 @@ if __name__ == "__main__":
         log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
-    # save_freq is in ITERATIONS (n_calls), not timesteps.
-    # Each iteration = n_envs * n_steps = 32 * 128 = 4096 steps.
-    # 245 iterations * 4096 = 1,003,520 timesteps (~1M steps).
     checkpoint_callback = CheckpointCallback(
-        save_freq=245, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
@@ -173,17 +180,16 @@ if __name__ == "__main__":
         n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
         make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_107 -- Experiment 16: Adversarial Cursor (visible secondary agent)",
-            f"Cursor: state machine, visible during THREATENING/ATTACK only",
-            f"Params: {pstr}",
-            f"Training: ALE/Breakout-v5, fs=4, AdversarialCursorWrapper",
-            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
-            f"Key: visible agent with agency. Tracking → cursor hides. Not tracking → attack.",
+            f"PPO_131 — Experiment 35a: Proximity Reward Linear Annealing",
+            f"Scale: {INITIAL_SCALE} -> {FINAL_SCALE} over {TARGET_STEPS:,} steps",
+            f"Training: ALE/Breakout-v5 + AnnealingProximityRewardWrapper",
+            f"Eval/Check: Standard Breakout (NO proximity reward)",
         ])
 
+    scale_callback = ScaleUpdateCallback(TARGET_STEPS)
     label_callback = RunLabelCallback(RUN_NAME)
     callbacks = CallbackList([eval_callback, checkpoint_callback,
-                              memorization_callback, label_callback])
+                              memorization_callback, label_callback, scale_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:

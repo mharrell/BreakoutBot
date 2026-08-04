@@ -1,6 +1,7 @@
 
 .venv/
 models/
+archive/
 logs/
 tensorboard/
 recordings/

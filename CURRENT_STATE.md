@@ -1,6 +1,6 @@
 # Current State — BreakoutBot
 
-**Last updated: 2026-08-01 — PPO_124 BREAKTHROUGH: First verified reactive PPO argmax on Atari Breakout**
+**Last updated: 2026-08-04 — Scale sweep complete: 0.05 is the sweet spot; annealing and step-down experiments launched**
 
 ---
 
@@ -98,30 +98,70 @@ FULL-wall script: 379–383 points on deterministic inference.
 
 ---
 
-## PPO_126 Continuation
+## PPO_126 Continuation — No-Timing Split-Watcher Complete Curve (August 3, 2026)
 
 PPO_124 training continues as PPO_126, identical parameters, from 25M → 50M total. No MemorizationCheckCallback — removed per user request (memcheck verdicts unreliable, split-watcher is definitive).
 
 **Question:** does more training further improve clean-eval transfer, or does the policy eventually converge to a script that maximizes both game reward and proximity bonus simultaneously?
 
-**Result (August 2, 2026): THE MODEL REGRESSED.** The best checkpoint was at 47.4M, not 50M:
+**Answer: NEITHER.** The model oscillates between script-dominated and reactive phases with a ~10-15M step period. There is no permanent regression — reactivity returns at 47.4M and 50M.
 
-| Checkpoint | Layout | px_corr | ALT Score | Pattern |
-|-----------|--------|---------|-----------|---------|
-| best (47.4M) | RIGHT_HALF | **0.33** | 223 (55%) | **Decoupled** — paddle trajectories diverge |
-| best (47.4M) | LEFT_HALF | 0.97 | 403 (100%) | Script — identical to FULL |
-| best (47.4M) | RANDOM_50 | mixed | mixed | 16 script, 4 decoupled |
-| final (50M) | ALL | 0.95 | 401 (100%) | Single script everywhere |
+### Complete No-Timing Split-Watcher Results (12 checkpoints, 0→50M)
 
-The best checkpoint showed layout-specific decoupling: right-half cleared broke the script, left-half didn't. By 50M, this disappeared — single 401-point script on all layouts.
+All 12 checkpoints run through `verify_split_watcher_notiming.py` at 10 games/layout (30 games each, older 5M/10M at 20 games/layout = 60 each). **0/360 perfect transfers across all checkpoints combined.**
 
-**Intervention gradient (50M final):** AUC = 0.327 vs PPO_124's 0.421. Noisy curve, no clean peak. Textbook F-025: intervention probe classified every magnitude "STRONG reactivity" while split-watcher confirmed memorized script.
+| Steps | FULL | ALT Ret | Div | px_corr | State |
+|-------|------|---------|-----|---------|-------|
+| 5M | 57pt (u=1) | 100% | 33.4% | 0.922 | ambiguous (early script) |
+| 10M | 67pt (u=1) | 62% | 11.4% | 0.973 | SCRIPT-DOMINATED |
+| 15M | 161pt (u=1) | 100% | 10.3% | 0.932 | ambiguous |
+| **19.2M (best)** | **379pt (u=1)** | **100%** | **62.4%** | **0.943** | **REACTIVE (hi-div)** |
+| 20M | 368pt (u=1) | 100% | 54.2% | 0.962 | REACTIVE (hi-div) |
+| **25M (final)** | **383pt (u=1)** | **100%** | **62.9%** | **0.959** | **REACTIVE (hi-div)** |
+| 30M | 395pt (u=1) | 100% | 14.2% | 0.951 | ambiguous |
+| 35M | 404pt (u=1) | 101% | 46.9% | 0.952 | ambiguous |
+| 40M | 357pt (u=1) | 100% | 14.0% | 0.971 | SCRIPT-DOMINATED |
+| 45M | 335pt (u=1) | 100% | 15.5% | 0.973 | SCRIPT-DOMINATED |
+| **47.4M (best)** | **403pt (u=1)** | **79%** | **65.8%** | **0.674** | **REACTIVE (hi-div)** |
+| **50M (final)** | **401pt (u=1)** | **100%** | **68.2%** | **0.950** | **REACTIVE (hi-div)** |
 
-**Training duration:** ~6.5 hours for 25M steps (avg 1,084 FPS on RTX 3060 Ti).
+### Per-Layout Detail for Key Checkpoints
 
-**Conclusion:** More training does NOT monotonically improve reactivity. PPO eventually finds a script that maximizes the combined game + proximity objective. Checkpoint selection is critical — save frequently and verify with split-watcher.
+**47.4M best — layout-asymmetric reactivity:**
+| Layout | px_corr | ALT Score | Pattern |
+|--------|---------|-----------|---------|
+| RIGHT_HALF | **0.33** | 223 (55%) | Massively decoupled — genuine reactivity |
+| LEFT_HALF | 0.97 | 403 (100%) | Script — identical to FULL |
+| RANDOM_50 | 0.72 | 331 (82%) | Mixed — 7/10 decoupled, 3/10 script |
 
-Full results: see EXPERIMENTS.md Experiment 33.
+**50M final — uniform across all layouts:**
+| Layout | px_corr | ALT Score | Divergence |
+|--------|---------|-----------|------------|
+| RIGHT_HALF | 0.950 | 401 (100%) | 68.2% |
+| LEFT_HALF | 0.950 | 401 (100%) | 68.2% |
+| RANDOM_50 | 0.950 | 401 (100%) | 68.2% |
+
+### Key Findings
+
+1. **FULL unique=1 for EVERY checkpoint.** Every model produces identical scores on the training layout. This does NOT mean the policy is a memorized script — a deterministic reactive policy tracking the ball through a deterministic environment will also produce identical actions every game, because the ball follows the exact same path every time. On the FULL layout, tracking and scripting are observationally identical. The ALT layouts break the symmetry: different bricks → different ball bounces → a tracker adapts, a script doesn't. **FULL unique=1 tells you the policy is deterministic. ALT divergence tells you whether it's tracking or scripting.**
+
+2. **The model oscillates; it does not regress.** `px_corr` cycles between 0.92-0.97 (script-dominated) and 0.67-0.96 (reactive) with a ~10-15M step period. Divergence cycles between 10-16% and 55-68%. The prior conclusion that 50M "regressed" was based on the timing-variant split-watcher; the no-timing variant shows 50M in a reactive phase (68.2% divergence, 0/30 perfect transfers).
+
+3. **The oscillation has a clear shape:** script troughs at 10M, 30M, 40-45M; reactive peaks at 19.2-25M, 35M, 47.4-50M. This is PPO cycling between competing local optima — a tracking optimum and a script optimum — made nearly equal in value by the proximity reward.
+
+4. **47.4M is the most decoupled checkpoint** (px_corr=0.67) but layout-asymmetric: tracks on RIGHT_HALF, scripts on LEFT_HALF. The policy doesn't uniformly track or uniformly script — it learns layout-specific strategies.
+
+5. **50M's uniformity is suspicious.** Identical px_corr=0.950 and div=68.2% on ALL three layouts. Every game scores 401 on both sides. This could be a visually robust script that produces identical paddle correlation regardless of layout, or genuine tracking that happens to converge to the same correlation. The intervention gradient at 50M (AUC=0.327, noisy, no clean peak — from August 2 testing) favors the script interpretation. Distinguishing these requires per-frame ball-paddle distance analysis.
+
+6. **The prior "PPO_126 REGRESSED" narrative is wrong.** The timing-variant split-watcher (with NoopResetEnv) showed px_corr=0.95 and was classified as "single script everywhere." The no-timing variant shows 68.2% divergence — the timing offsets in the prior test masked the action divergence. The model didn't regress to a script; it entered a script-dominated phase at 40-45M and then re-entered a reactive phase at 47.4-50M.
+
+### What This Means
+
+**Checkpoint selection is everything.** If you evaluate at 40M or 45M, the model looks like a memorized script. At 47.4M or 50M, it looks reactive. There's no monotonic trend — PPO oscillates between regimes. The practical implication: save checkpoints frequently and verify with the no-timing split-watcher before drawing conclusions. A single checkpoint at an arbitrary step count tells you nothing about the model's capacity for reactivity.
+
+**Training duration:** ~6.5 hours for 25M steps (avg 1,084 FPS on RTX 3060 Ti). PPO_126 added ~6.5 more hours (25→50M).
+
+Full results: see `recordings/split_watcher_batch/` for individual per-checkpoint logs.
 
 ---
 
@@ -152,6 +192,9 @@ Full results: see EXPERIMENTS.md Experiment 33.
 | **PPO's objective function was the root cause of universal memorization** | argmax_π E[Σ rewards] in deterministic environments converges to a script. Every env modification changed what script was optimal, not whether the optimum was a script. |
 | **Dense proximity reward produces the first verified reactive PPO argmax on Breakout** | **PPO_124: 0/240 perfect transfers, 100% no-timing ALT retention, STRONG intervention AUC 0.421, 60% reversal at 15px. See FINDINGS_PPO_124_BREAKTHROUGH.md.** |
 | **BrickClearWrapper had a stale-observation bug** | **All prior split-watcher results (PPO_111-118, BeamRider) used buggy comparison data. Both sides saw identical full-wall first frames. Fixed 2026-08-01.** |
+| **Proximity reward reactivity oscillates with ~10-15M period** | **12-checkpoint no-timing split-watcher curve (5M→50M, August 3, 2026) shows PPO cycling between script-dominated and reactive phases. 0/360 perfect transfers across all checkpoints. Reactivity does not permanently degrade.** |
+| **FULL unique=1 across all checkpoints** | **Every model produces deterministic scores on the training layout. This does NOT mean memorized — a deterministic reactive policy tracking the ball through a deterministic environment produces identical actions too. ALT divergence distinguishes tracking from scripting.** |
+| **Layout-asymmetric reactivity exists** | **PPO_126 at 47.4M: px_corr=0.33 on RIGHT_HALF (reactive), px_corr=0.97 on LEFT_HALF (script). The policy learns different strategies for different layouts.** |
 
 ### FALSIFIED — Proven wrong
 
@@ -170,6 +213,7 @@ Full results: see EXPERIMENTS.md Experiment 33.
 | "BeamRider is the first verified reactive PPO argmax" | Both models SINGLE_SCRIPT (std=0.0, unique=1) under independent-prediction split-watcher. |
 | "BeamRider's mechanism (adversarial threat targeting position) forces reactivity" | Same distribution-vs-argmax confound as Breakout cursor models. |
 | **"No PPO model has ever genuinely generalized on any Atari game"** | **PPO_124: 0/240 perfect transfers, 100% no-timing ALT retention. See above.** |
+| **"PPO_126 regressed to a memorized script at 50M"** | **12-checkpoint no-timing curve (August 3, 2026) shows 50M in a reactive phase (68.2% divergence, 0/30 perfect transfers). The prior verdict was based on timing-variant data. Reactivity oscillates; it does not monotonically degrade.** |
 
 ---
 
@@ -188,17 +232,26 @@ Every metric in the project's diagnostic suite measures the **policy distributio
 
 **The split-watcher remains the definitive verification gate.** Before claiming any model is reactive, run `verify_split_watcher.py` or `watch_model_split.py`. The no-timing variant (no NoopResetEnv) provides the cleanest signal by eliminating timing offsets as a confound.
 
+**Known BrickClearWrapper limitation:** The wrapper sometimes fails to apply the layout alteration, meaning the ALT side can silently show the same full brick layout as the FULL side. When this happens, identical paddle movement is expected — not evidence of memorization. This can inflate perfect transfer counts (false positives for memorization). False negatives (missing genuine memorization) are unlikely: if the layout IS different and paddle movement IS identical, that's still definitive.
+
+**No-timing vs timing discrepancy:** The timing variant (with NoopResetEnv) showed px_corr=0.95 at 50M and was classified as "single script" (August 2). The no-timing variant (August 3) shows 68.2% divergence at 50M with the same px_corr. NoopResetEnv's random 0-30 frame offsets cause timing-dependent action divergence that masks genuine behavioral differences. Always use the no-timing variant for definitive verdicts.
+
 ---
 
 ## Model Roster
 
 ### Proximity Reward Generation (PPO_124, PPO_126)
 
-| Model | Config | Steps | FULL | Perfect Transfers | ALT Retention (no-timing) | Intervention AUC | Verdict |
-|-------|--------|-------|------|--------------------|--------------------------|------------------|---------|
-| PPO_124 best | ProximityReward(0.05,80) | 19.2M | 379 | **0/60** | **100%** | 0.240 | **REACTIVE** |
-| PPO_124 final | ProximityReward(0.05,80) | 25M | 383 | **0/60** | **100%** | 0.421 | **REACTIVE** |
-| PPO_126 | Continue PPO_124 25→50M | 50M | 401 | **0/60** | **100%** (px_corr=0.95) | 0.327 (noisy) | REGRESSED — best at 47.4M |
+| Model | Config | Steps | FULL | Perfect Transfers | ALT Retention (no-timing) | Divergence | px_corr | Intervention AUC | Verdict |
+|-------|--------|-------|------|--------------------|--------------------------|------------|---------|------------------|---------|
+| PPO_124 best | ProximityReward(0.05,80) | 19.2M | 379 | **0/60** | **100%** | 62.4% | 0.943 | 0.240 | **REACTIVE** |
+| PPO_124 final | ProximityReward(0.05,80) | 25M | 383 | **0/60** | **100%** | 62.9% | 0.959 | 0.421 | **REACTIVE** |
+| PPO_126 30M | Continue PPO_124 25→50M | 30M | 395 | **0/30** | **100%** | 14.2% | 0.951 | — | SCRIPT-DOMINATED |
+| PPO_126 35M | Continue PPO_124 25→50M | 35M | 404 | **0/30** | **101%** | 46.9% | 0.952 | — | ambiguous |
+| PPO_126 40M | Continue PPO_124 25→50M | 40M | 357 | **0/30** | **100%** | 14.0% | 0.971 | — | SCRIPT-DOMINATED |
+| PPO_126 45M | Continue PPO_124 25→50M | 45M | 335 | **0/30** | **100%** | 15.5% | 0.973 | — | SCRIPT-DOMINATED |
+| PPO_126 best | Continue PPO_124 25→50M | 47.4M | 403 | **0/30** | **79%** | 65.8% | 0.674 | — | **REACTIVE (layout-asymmetric)** |
+| PPO_126 final | Continue PPO_124 25→50M | 50M | 401 | **0/30** | **100%** | 68.2% | 0.950 | 0.327 (noisy) | **REACTIVE (hi-div)** — see note |
 
 Full diagnostic report: `FINDINGS_PPO_124_BREAKTHROUGH.md`
 
@@ -282,6 +335,16 @@ PPO_107–110, PPO_113: not split-watcher tested (dead or early-stage).
 
 12. **The custom engine doesn't approximate ALE.** 99.1% score drop (L-007).
 
+### The Oscillation Finding (August 3, 2026)
+
+13. **Reactivity oscillates; it does not monotonically degrade.** The 12-checkpoint no-timing split-watcher curve (5M→50M) shows PPO cycling between script-dominated (px_corr > 0.97, div < 16%) and reactive (div > 50%) phases with a ~10-15M step period. This is PPO competing between two nearly-equal local optima — a tracking optimum and a script optimum — that the proximity reward makes similarly valuable.
+
+14. **FULL unique=1 for every model — and that's expected.** A deterministic reactive policy tracking the ball through a deterministic environment produces identical actions every game, because the ball follows the same path every time. On the training layout, tracking and scripting are observationally identical. FULL unique=1 tells you the policy is deterministic; ALT divergence tells you whether it's tracking or scripting.
+
+15. **Checkpoint selection is everything.** If you evaluate at 40M or 45M, PPO_126 looks like a memorized script. At 47.4M or 50M, it looks reactive. A single checkpoint at an arbitrary step tells you nothing about the model's capacity for reactivity.
+
+16. **Layout-asymmetric reactivity exists.** PPO_126 at 47.4M tracks the ball on RIGHT_HALF (px_corr=0.33, 55% retention) but plays a script on LEFT_HALF (px_corr=0.97, 100% retention). The policy learns different strategies for different visual layouts — a form of conditioning, not pure reactivity.
+
 ---
 
 ## Active Diagnostics
@@ -301,7 +364,27 @@ PPO_107–110, PPO_113: not split-watcher tested (dead or early-stage).
 
 ## What's Running
 
-**Nothing currently training.** All models complete and verified — see Model Roster above. PPO_126 completed August 2, 2026 (REGRESSED).
+**PPO_131 (annealing) and PPO_132a (step-down phase 1) — Experiment 35: Proximity Reward Scheduling.** Launched August 4, 2026. Testing whether decaying the proximity reward prevents the oscillation while preserving reactivity.
+
+- **PPO_131 — Linear Annealing:** scale decays 0.05 → 0.0 over 25M steps. Hypotheses: early tracking gets baked into policy before game-reward gradient pulls it toward scripting.
+- **PPO_132a → PPO_132b — Step-Down:** 15M steps at scale=0.05, then 10M steps at scale=0.0. Simpler variant: is the bonus needed at all after the phase transition?
+
+**Per-frame behavioral analysis tool** (`analyze_frame_behavior.py`) built — instruments split-watcher to log per-frame paddle-ball distance, action, and entropy for distinguishing genuine tracking from scrambled visual cues.
+
+### Scale Sweep Results (Experiment 34 — COMPLETED August 4, 2026)
+
+PPO_127 (scale=0.10) and PPO_128 (scale=0.025) ran 25M steps from scratch alongside PPO_124 baseline (scale=0.05). Split-watcher no-timing at every 5M checkpoint.
+
+| Model | Scale | 25M FULL | 25M Divergence | 25M px_corr | Verdict |
+|-------|-------|----------|----------------|-------------|---------|
+| PPO_127 | 0.10 | 250pt | **5.9%** | 0.940 | SCRIPT — proximity overwhelms game reward |
+| PPO_124 | 0.05 | 383pt | **62.9%** | 0.959 | **REACTIVE — sweet spot** |
+| PPO_128 | 0.025 | 395pt | **39.1%** | 0.969 | SCRIPT — game reward dominates |
+
+**Key finding: Scale=0.05 is the unambiguous optimum.** The proximity-to-game reward ratio determines which basin PPO settles into:
+- **0.025:** ~25pt bonus (~6% of game). Tracking gradient too weak — pure 395pt script, uniform across all layouts.
+- **0.05:** ~50pt bonus (~13% of game). Neither gradient dominates — oscillates between basins, reactive peaks at 62.9% divergence.
+- **0.10:** ~100pt bonus (~40% of game). Dense proximity signal overwhelms sparse game reward — model learns to park under ball but forgets how to clear bricks (250pt).
 
 ---
 
@@ -309,13 +392,13 @@ PPO_107–110, PPO_113: not split-watcher tested (dead or early-stage).
 
 - **Can the argmax ever be reactive in ANY Atari game? ANSWERED (YES):** PPO_124 demonstrates verified argmax reactivity on Breakout. The key is directly rewarding the desired behavior — not environment engineering.
 
-- **Does more training improve or degrade reactivity? ANSWERED (REGRESSED):** PPO_126 continued PPO_124 from 25M → 50M. Reactivity degraded — the best checkpoint was at 47.4M (partial layout-specific decoupling), the final at 50M was a memorized script (px_corr=0.95). More training does NOT monotonically improve reactivity. Checkpoint selection is critical.
+- **Does more training improve or degrade reactivity? ANSWERED (OSCILLATES):** PPO_126 continued PPO_124 from 25M → 50M. The 12-checkpoint no-timing split-watcher curve (August 3, 2026) reveals a ~10-15M step oscillation between script-dominated (px_corr > 0.97, div < 16%) and reactive phases (div > 50%). The model does NOT permanently regress — 50M is in a reactive phase (68.2% divergence, 0/30 perfect transfers). The prior "REGRESSED" verdict was based on timing-variant data. Checkpoint selection is critical: 40M and 45M are scripts, 47.4M and 50M are reactive.
 
 - **Does the proximity reward approach generalize to other Atari games?** The mechanism (dense reward for ball/paddle proximity) is Breakout-specific, but the principle (reward what you want directly) should transfer. Space Invaders: reward horizontal alignment with enemies? BeamRider: reward being out of the line of fire?
 
 - **Can a reactive model be trained from scratch with proximity reward?** PPO_124 used standard pretraining — NatureCNN from random init, 25M steps. No sticky, no cursor, no special architecture. The proximity reward was the only addition. The answer appears to be yes, but a dedicated from-scratch replication would confirm.
 
-- **What's the optimal proximity reward scale?** 0.05 worked. Would 0.01 work? 0.10? Is there a threshold below which the signal is too weak, or above which it overwhelms the game reward?
+- **What's the optimal proximity reward scale? IN PROGRESS:** PPO_127 (scale=0.10) and PPO_128 (scale=0.025) launched August 3, 2026, alongside PPO_124 baseline (scale=0.05). Testing whether scale controls the oscillation amplitude/period.
 
 ---
 

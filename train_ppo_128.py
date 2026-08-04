@@ -1,20 +1,24 @@
 """
-PPO_115 -- Experiment 24: Adversarial Cursor FROM SCRATCH (Speed Ablation)
+PPO_128 — Experiment 34b: Proximity Reward Scale Sweep (LOW: scale=0.025)
 
-PPO_110 (approach_speed=4.0) achieved 39.4% reversal at 21M. PPO_111 (speed=4
-+ push=8 combined) achieved 54.8%. This isolates speed alone at 8.0 to
-determine whether speed scaling accounts for the combined breakthrough.
+Tests whether halving the proximity reward scale causes the model to stay
+in script-dominated phases, confirming that the oscillation is driven by
+two competing basins of nearly equal depth at scale=0.05.
 
-If speed=8 alone hits 55%: push is irrelevant, speed is the sole mechanism.
-If speed=8 plateaus at ~40%: the combined push+speed is the real lever.
+PPO_124 (scale=0.05) showed ~15M-period oscillation between reactive peaks
+and script troughs. Hypothesis: scale=0.025 makes scripting relatively more
+valuable than tracking — the model should spend more time in script-dominated
+phases, possibly never entering sustained reactive phases.
 
 Design:
-  - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
-              + AdversarialCursorWrapper (approach_speed=8.0)
-  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
-  - FROM SCRATCH (no fork, seed=115)
-  - Target: 5M steps
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv (5 lives)
+              + ProximityRewardWrapper(scale=0.025, max_distance=80)
+  - Eval/Check: Standard Breakout (NO proximity reward) — transfer test
+  - FROM SCRATCH (seed=128)
+  - Target: 25M steps
   - Standard PPO: NatureCNN, ent_coef=0.006
+  - Checkpoints every ~1.25M steps for split-watcher analysis
+  - Compare divergence curve against PPO_124 (scale=0.05) and PPO_127 (scale=0.10)
 """
 import os
 import numpy as np
@@ -27,31 +31,24 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
-from adversarial_cursor_wrapper import AdversarialCursorWrapper
 from autoreset_wrapper import AutoResetWrapper
 from run_label_callback import RunLabelCallback
+from proximity_reward_wrapper import ProximityRewardWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_115"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_128"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 ENT_COEF = 0.006
-SEED = 115
+SEED = 128
 
-# approach_speed = 8.0 (4x PPO_107 baseline, 2x PPO_110)
-# Does speed scaling alone replicate PPO_111's 54.8%? Or is push required?
-CURSOR_PARAMS = dict(
-    approach_speed=8.0,
-    tracking_threshold=8,
-    threat_radius=8,
-    warning_frames=5,
-    push_magnitude=4.0,
-    cooldown_frames=60,
-    cursor_size=4,
-)
+# LOW proximity reward — scripting should dominate
+PROXIMITY_SCALE = 0.025
+PROXIMITY_MAX_DIST = 80.0
+PROXIMITY_DESCEND_THRESHOLD = 100
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -84,20 +81,23 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    """Breakout WITH AdversarialCursorWrapper, frameskip=4."""
+    """Breakout + LOW proximity reward (scale=0.025)."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
-    env = AdversarialCursorWrapper(env, **CURSOR_PARAMS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
+    env = ProximityRewardWrapper(
+        env, scale=PROXIMITY_SCALE, max_distance=PROXIMITY_MAX_DIST,
+        descend_threshold=PROXIMITY_DESCEND_THRESHOLD,
+    )
     env = Monitor(env)
     return env
 
 
 def make_eval_env():
-    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
+    """Standard Breakout WITHOUT proximity reward — transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -110,7 +110,7 @@ def make_eval_env():
 
 
 def make_check_env():
-    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
+    """Standard Breakout WITHOUT proximity reward."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -125,14 +125,17 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    pstr = ', '.join(f'{k}={v}' for k, v in CURSOR_PARAMS.items())
-    print(f"{RUN_NAME} -- Experiment 24: Adversarial Cursor FROM SCRATCH (Speed Ablation)")
-    print(f"  Cursor params: {pstr}")
-    print(f"  Key change: approach_speed 2->8 (4x baseline). Does speed alone scale?")
-    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, AdversarialCursorWrapper")
-    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
+    print(f"{RUN_NAME} — Experiment 34b: Proximity Reward Scale Sweep (LOW)")
+    print(f"  Scale: {PROXIMITY_SCALE}, Max distance: {PROXIMITY_MAX_DIST}")
+    print(f"  Descend threshold: ball_y > {PROXIMITY_DESCEND_THRESHOLD}")
+    print(f"  Formula: bonus = {PROXIMITY_SCALE} * max(0, 1 - |paddle-ball|/{PROXIMITY_MAX_DIST})")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv + ProximityReward")
+    print(f"  Eval/Check: Standard Breakout (NO proximity reward) — transfer test")
     print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Hypothesis: Lower scale → scripting basin deeper → oscillation dampened toward scripts")
     print()
+
+    os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
@@ -145,8 +148,6 @@ if __name__ == "__main__":
         log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
-    # save_freq empirically corresponds to steps/n_envs (not iterations).
-    # save_freq=156,250 → saves every ~5M steps.
     checkpoint_callback = CheckpointCallback(
         save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
@@ -156,12 +157,11 @@ if __name__ == "__main__":
         n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
         make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_115 -- Experiment 24: Adversarial Cursor FROM SCRATCH (Speed Ablation)",
-            f"Cursor: approach_speed=8.0 (4x baseline, 2x PPO_110)",
-            f"Params: {pstr}",
-            f"Training: ALE/Breakout-v5, fs=4, AdversarialCursorWrapper",
-            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
-            f"Key: from scratch. Does fast cursor force reactivity without pretraining?",
+            f"PPO_128 — Experiment 34b: Proximity Reward Scale Sweep (LOW)",
+            f"Scale: {PROXIMITY_SCALE}, Max dist: {PROXIMITY_MAX_DIST}, "
+            f"Threshold: ball_y > {PROXIMITY_DESCEND_THRESHOLD}",
+            f"Training: ALE/Breakout-v5 + ProximityRewardWrapper (LOW scale)",
+            f"Eval/Check: Standard Breakout (NO proximity reward) — transfer test",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)

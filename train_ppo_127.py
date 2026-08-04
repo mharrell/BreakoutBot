@@ -1,27 +1,24 @@
 """
-PPO_111 -- Experiment 20: Adversarial Cursor FROM SCRATCH (Combined: Hard Push + Fast Cursor)
+PPO_127 — Experiment 34a: Proximity Reward Scale Sweep (HIGH: scale=0.10)
 
-PPO_109 (push=8) and PPO_110 (speed=4) independently proved the cursor mechanism
-forces ball-tracking from scratch. This combines both levers:
+Tests whether doubling the proximity reward scale eliminates the oscillation
+between script-dominated and reactive phases by making the tracking basin
+unambiguously deeper than the scripting basin.
 
-  - push_magnitude=8.0:  harder attacks when paddle fails to track (PPO_109: 19% reversal)
-  - approach_speed=4.0: faster cursor threat escalation (PPO_110: 42.3% reversal)
-
-These mechanisms operate on different aspects of the cursor threat model:
-  - Speed controls how quickly the cursor escalates from APPROACHING→THREATENING→ATTACK
-  - Push controls how hard the ball is deflected when the attack lands
-
-If tracking is additive: 19% + 42% → expect ~55-60% reversal
-If tracking is synergistic: the fast cursor creates more frequent attack opportunities
-  while the hard push makes each attack more consequential → could exceed 60%
+PPO_124 (scale=0.05) showed ~15M-period oscillation between reactive peaks
+(div>50%) and script troughs (div<16%). Hypothesis: scale=0.05 puts tracking
+and scripting at nearly equal value. scale=0.10 should make tracking strictly
+better, damping or eliminating the oscillation.
 
 Design:
-  - Training: ALE/Breakout-v5, frameskip=4, EpisodicLifeEnv (5 lives)
-              + AdversarialCursorWrapper (push_magnitude=8.0, approach_speed=4.0)
-  - Eval/Check: Standard ALE/Breakout-v5 (NO wrapper) — test transfer
-  - FROM SCRATCH (no fork, seed=111)
-  - Target: 50M steps
+  - Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv (5 lives)
+              + ProximityRewardWrapper(scale=0.10, max_distance=80)
+  - Eval/Check: Standard Breakout (NO proximity reward) — transfer test
+  - FROM SCRATCH (seed=127)
+  - Target: 25M steps
   - Standard PPO: NatureCNN, ent_coef=0.006
+  - Checkpoints every ~1.25M steps for split-watcher analysis
+  - Compare divergence curve against PPO_124 (scale=0.05) and PPO_128 (scale=0.025)
 """
 import os
 import numpy as np
@@ -34,32 +31,24 @@ from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
-from adversarial_cursor_wrapper import AdversarialCursorWrapper
 from autoreset_wrapper import AutoResetWrapper
 from run_label_callback import RunLabelCallback
+from proximity_reward_wrapper import ProximityRewardWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "PPO_111"
-TARGET_STEPS = 50_000_000
+RUN_NAME = "PPO_127"
+TARGET_STEPS = 25_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 ENT_COEF = 0.006
-SEED = 111
+SEED = 127
 
-# Combined: both top-performing levers from 108 escalation study
-# push_magnitude=8.0 (108a: 48.1% forked, 109: 19% from scratch)
-# approach_speed=4.0 (108d: 46.7% forked, 110: 42.3% from scratch)
-CURSOR_PARAMS = dict(
-    approach_speed=4.0,
-    tracking_threshold=8,
-    threat_radius=8,
-    warning_frames=5,
-    push_magnitude=8.0,
-    cooldown_frames=60,
-    cursor_size=4,
-)
+# HIGH proximity reward — tracking should dominate
+PROXIMITY_SCALE = 0.10
+PROXIMITY_MAX_DIST = 80.0
+PROXIMITY_DESCEND_THRESHOLD = 100
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -92,20 +81,23 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    """Breakout WITH AdversarialCursorWrapper, frameskip=4."""
+    """Breakout + HIGH proximity reward (scale=0.10)."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
-    env = AdversarialCursorWrapper(env, **CURSOR_PARAMS)
     env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
+    env = ProximityRewardWrapper(
+        env, scale=PROXIMITY_SCALE, max_distance=PROXIMITY_MAX_DIST,
+        descend_threshold=PROXIMITY_DESCEND_THRESHOLD,
+    )
     env = Monitor(env)
     return env
 
 
 def make_eval_env():
-    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
+    """Standard Breakout WITHOUT proximity reward — transfer test."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -118,7 +110,7 @@ def make_eval_env():
 
 
 def make_check_env():
-    """Standard Breakout WITHOUT cursor wrapper — test transfer."""
+    """Standard Breakout WITHOUT proximity reward."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
     env = FireResetEnv(env)
@@ -133,14 +125,17 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    pstr = ', '.join(f'{k}={v}' for k, v in CURSOR_PARAMS.items())
-    print(f"{RUN_NAME} -- Experiment 20: Adversarial Cursor FROM SCRATCH (Combined)")
-    print(f"  Cursor params: {pstr}")
-    print(f"  Combined: push_magnitude=8.0 (108a/109) + approach_speed=4.0 (108d/110)")
-    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv, AdversarialCursorWrapper")
-    print(f"  Eval/Check: Standard Breakout (NO cursor wrapper) — test transfer")
+    print(f"{RUN_NAME} — Experiment 34a: Proximity Reward Scale Sweep (HIGH)")
+    print(f"  Scale: {PROXIMITY_SCALE}, Max distance: {PROXIMITY_MAX_DIST}")
+    print(f"  Descend threshold: ball_y > {PROXIMITY_DESCEND_THRESHOLD}")
+    print(f"  Formula: bonus = {PROXIMITY_SCALE} * max(0, 1 - |paddle-ball|/{PROXIMITY_MAX_DIST})")
+    print(f"  Training: ALE/Breakout-v5, fs=4, EpisodicLifeEnv + ProximityReward")
+    print(f"  Eval/Check: Standard Breakout (NO proximity reward) — transfer test")
     print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Hypothesis: Higher scale → tracking basin deeper → oscillation dampened")
     print()
+
+    os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
@@ -153,9 +148,6 @@ if __name__ == "__main__":
         log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
-    # save_freq empirically corresponds to steps/n_envs (not iterations).
-    # save_freq=245 produces saves every 245*32=7,840 steps (way too frequent).
-    # Target: every ~5M steps → save_freq = 5,000,000 / 32 = 156,250.
     checkpoint_callback = CheckpointCallback(
         save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
@@ -165,12 +157,11 @@ if __name__ == "__main__":
         n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
         make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_111 -- Experiment 20: Adversarial Cursor FROM SCRATCH (Combined)",
-            f"Cursor: push_magnitude=8.0 + approach_speed=4.0 (both levers)",
-            f"Params: {pstr}",
-            f"Training: ALE/Breakout-v5, fs=4, AdversarialCursorWrapper",
-            f"Eval/Check: Standard Breakout (no cursor) — test transfer",
-            f"Key: from scratch. Are both levers additive or synergistic?",
+            f"PPO_127 — Experiment 34a: Proximity Reward Scale Sweep (HIGH)",
+            f"Scale: {PROXIMITY_SCALE}, Max dist: {PROXIMITY_MAX_DIST}, "
+            f"Threshold: ball_y > {PROXIMITY_DESCEND_THRESHOLD}",
+            f"Training: ALE/Breakout-v5 + ProximityRewardWrapper (HIGH scale)",
+            f"Eval/Check: Standard Breakout (NO proximity reward) — transfer test",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)

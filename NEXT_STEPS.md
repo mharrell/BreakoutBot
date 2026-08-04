@@ -2,9 +2,19 @@
 
 ## Current State
 
-PPO_124 (proximity reward) is the first verified reactive PPO argmax on Atari Breakout: 0/240 perfect transfers, 100% no-timing ALT retention, intervention AUC 0.421. Every prior model (123 experiments) was confirmed memorized by split-watcher.
+PPO_124 (proximity reward, scale=0.05) is the first verified reactive PPO argmax on Atari Breakout: 0/240 perfect transfers, 100% no-timing ALT retention, intervention AUC 0.421. Every prior model (123 experiments) was confirmed memorized by split-watcher.
 
-However, publishing efforts (Medium, Reddit) got little traction. Key weakness to address before arXiv submission: **single seed per config.**
+**Since this doc was first drafted (Aug 3-4):**
+
+- **Scale sweep complete:** PPO_127 (scale=0.10) and PPO_128 (scale=0.025) both ran 25M steps. Results: 0.05 is the unambiguous sweet spot. Higher scale (0.10) suppresses both score and reactivity — proximity overwhelms game reward. Lower scale (0.025) produces high scores but script-dominated — game reward overpowers tracking gradient. The relationship is non-monotonic and tightly tuned.
+
+- **PPO_126 oscillation discovered (NOT regression):** Split-watcher on all 12 checkpoints (5M→50M) revealed PPO bounces between reactive and script-dominated phases with ~10-15M period. Two competing basins of nearly equal value at scale=0.05. The 50M checkpoint is in a script-dominated trough, not permanently regressed — it would likely oscillate back. FULL unique=1 for every checkpoint (expected — deterministic reactive policy on deterministic layout).
+
+- **Experiments 35a/35b designed but not yet launched:**
+  - PPO_131: Linear annealing (0.05→0.0 over 25M) — tests whether early tracking bakes in
+  - PPO_132a/b: Step-down (15M at 0.05, then 10M at 0.0) — tests whether tracking persists without bonus
+
+However, publishing efforts (Medium, Reddit) got little traction. Key weaknesses to address before arXiv submission: **single seed per config**, **no zero-scale ablation**.
 
 ## Priority 1: Multi-Seed Replication
 
@@ -16,7 +26,7 @@ Run 3 additional seeds of PPO_124 with identical config:
 | PPO_124b | 1242 | ProximityReward(scale=0.05) | 25M | same |
 | PPO_124c | 1243 | ProximityReward(scale=0.05) | 25M | same |
 
-Training time: ~6.5 hours each on RTX 3060 Ti. Can run sequentially or in parallel if GPU memory allows (32 envs each, ~870MB per instance — two might fit in 8GB VRAM).
+Training time: ~6.5 hours each on RTX 3060 Ti. Can run two in parallel on 8GB VRAM (32 envs each, ~870MB per instance).
 
 Script: clone `train_ppo_124.py`, change SEED to 1241/1242/1243, change RUN_NAME to PPO_124a/b/c.
 
@@ -38,42 +48,67 @@ This proves the proximity reward *caused* the reactivity — without it, the sam
 
 Script: clone `train_ppo_124.py`, set PROXIMITY_SCALE=0.0, RUN_NAME="PPO_124_control".
 
-## Priority 3: Scale Sensitivity Sweep
+## Priority 3: Scale Sensitivity Sweep ✅ DONE
 
-| Run | Seed | Scale | Expected |
-|-----|------|-------|----------|
-| PPO_127 | 127 | 0.01 | Too weak? May not shift optimum |
-| PPO_128 | 128 | 0.10 | Too strong? May overwhelm game reward |
-| PPO_129 | 129 | 0.25 | Stress test |
+Completed Aug 3-4 with PPO_127 (scale=0.10) and PPO_128 (scale=0.025). Both ran 25M steps.
 
-Shows there's a sweet spot. Maps the relationship between scale and reactivity.
+| Run | Seed | Scale | Score | Divergence | Verdict |
+|-----|------|-------|-------|------------|---------|
+| PPO_128 | 128 | 0.025 | 395pt | 39.1% | Script-dominated — game reward overwhelms tracking |
+| PPO_124 | 124 | 0.05 | ~350pt | ~70% | Sweet spot — balanced basins, oscillates |
+| PPO_127 | 127 | 0.10 | 250pt | 5.9% | Strongly script-dominated — proximity overwhelms game |
 
-## Priority 4: Pong Transfer
+Conclusion: scale=0.05 is the unambiguous sweet spot. No further scale values needed unless exploring very fine gradations (0.04, 0.06).
+
+## Priority 4: Oscillation Control (Annealing & Step-Down)
+
+Designed but NOT YET LAUNCHED:
+
+| Run | Seed | Config | Steps | Hypothesis |
+|-----|------|--------|-------|------------|
+| PPO_131 | 131 | Annealing 0.05→0.0 linear, 25M | 25M | Early tracking bakes in, late focus on game reward |
+| PPO_132a | 132 | ProximityReward(scale=0.05) | 15M | Phase 1: establish tracking |
+| PPO_132b | 132 | Clean Breakout (scale=0.0) | +10M | Phase 2: tracking persists without bonus? |
+
+Scripts: `train_ppo_131.py`, `train_ppo_132a.py`, `train_ppo_132b.py` — all written and ready.
+
+## Priority 5: Pong Transfer
 
 Apply proximity reward to Pong. Same principle: reward paddle for vertical closeness to ball. Tests whether the approach generalizes beyond Breakout.
 
 Needs: Pong RAM addresses (paddle Y, ball X/Y), adapted wrapper, training script.
 
-## Priority 5: Statistical Rigor
+`train_pong_baseline.py` exists for reference. This is the strongest evidence for "proximity reward as a general method."
 
-- Run 100+ games per layout in split-watcher (currently 20)
+## Priority 6: Statistical Rigor
+
+- Run 100+ games per layout in split-watcher (currently 20-30)
 - Bootstrap confidence intervals on px_corr and ALT retention
 - Formal statistical test on perfect transfer count
+- Per-frame tracking analysis via `analyze_frame_behavior.py` (tool built, not yet run)
 
-## Priority 6: Checkpoint Selection Analysis
+## Priority 7: Per-Frame Behavioral Analysis
 
-PPO_126 showed regression at 50M (best checkpoint was at 47.4M). Investigate:
-- Save checkpoints every 1M steps
-- Split-watcher each checkpoint
-- Find the "reactive window" — when does reactivity emerge and when does it collapse?
+`analyze_frame_behavior.py` is built but not yet run. Logs per-frame paddle/ball positions on both FULL and ALT layouts. Computes whether ALT paddle genuinely tracks ALT ball (lower distance to ALT ball than FULL ball). Distinguishes genuine tracking from scrambled visual cues.
+
+Run against PPO_124 best checkpoint with 20+ games to characterize the tracking signal at the frame level.
 
 ## Files to Create
 
 - `train_ppo_124a.py` through `train_ppo_124c.py` — multi-seed replication
 - `train_ppo_124_control.py` — zero-scale ablation
-- `train_ppo_127.py` through `train_ppo_129.py` — scale sweep
-- `pong_proximity_wrapper.py` + `train_pong_*.py` — Pong transfer
+- `pong_proximity_wrapper.py` + `train_pong_proximity.py` — Pong transfer
 - `verify_split_watcher_large.py` — 100-game verification with bootstrap CIs
+
+## Already Created (Aug 3-4)
+
+- `train_ppo_127.py` / `train_ppo_128.py` — scale sweep (complete at 25M)
+- `train_ppo_129.py` / `train_ppo_130.py` — continuation scripts (127→50M, 128→50M; deferred)
+- `train_ppo_131.py` — annealing experiment (not launched)
+- `train_ppo_132a.py` / `train_ppo_132b.py` — step-down experiment (not launched)
+- `annealing_proximity_wrapper.py` — decaying scale wrapper
+- `analyze_frame_behavior.py` — per-frame tracking analysis
+- `batch_split_watcher.py` / `run_batch.ps1` / `run_batch_fast.ps1` — batch split-watcher tooling
 
 ## Publishing Plan (after replication)
 

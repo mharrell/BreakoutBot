@@ -1,24 +1,16 @@
 """
-Freeway Baseline Probe — does PPO memorize a script in deterministic Freeway?
+PPO_132a — Experiment 35b Phase 1: Proximity Reward Step-Down (scale=0.05)
 
-Freeway is the minimal test case: 3 actions (UP/DOWN/NOOP), fully deterministic
-car patterns, timed 2-minute games. The tiny action space means the search space
-for scripts is trivially small — if ANY environment forces SINGLE_SCRIPT, it's
-this one. Conversely, if Freeway escapes memorization, the hypothesis needs
-rethinking.
-
-The game: a chicken crosses a highway. Cars move in fixed lanes at fixed speeds.
-The optimal policy is simple: move up when a gap appears, wait otherwise. This
-requires observing actual car positions — a script that moves at fixed times will
-walk into traffic.
-
-Quick probe: 1 seed, 10M steps, nosticky verification at end.
+First 15M steps at the optimal scale (0.05) to establish ball-tracking
+and the phase transition. Then PPO_132b continues from here at scale=0.0
+to see if reactivity persists without the proximity bonus.
 
 Design:
-  - "ALE/Freeway-v5", frameskip=4
-  - No FireResetEnv (no FIRE), No EpisodicLifeEnv (no lives, timed game)
+  - Training: ALE/Breakout-v5 + ProximityRewardWrapper(scale=0.05)
+  - Eval/Check: Standard Breakout (NO proximity reward) — transfer test
+  - FROM SCRATCH (seed=132)
+  - Target: 15M steps (phase 1)
   - Standard PPO: NatureCNN, ent_coef=0.006
-  - Target: 10M steps (~2 hours on RTX 3060 Ti)
 """
 import os
 import numpy as np
@@ -29,20 +21,24 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv
+from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv, FireResetEnv, EpisodicLifeEnv
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
 from run_label_callback import RunLabelCallback
+from proximity_reward_wrapper import ProximityRewardWrapper
 
 import ale_py
 gym.register_envs(ale_py)
 
-RUN_NAME = "FREEWAY_baseline"
-TARGET_STEPS = 10_000_000
+RUN_NAME = "PPO_132a"
+TARGET_STEPS = 15_000_000
 CHECKPOINT_PATH = f"./models/{RUN_NAME}/checkpoint"
 
 ENT_COEF = 0.006
-SEED = 203
+SEED = 132
+PROXIMITY_SCALE = 0.05
+PROXIMITY_MAX_DIST = 80.0
+PROXIMITY_DESCEND_THRESHOLD = 100
 
 
 class GrayscaleResize(gym.ObservationWrapper):
@@ -75,19 +71,25 @@ def get_latest_checkpoint(path):
 
 
 def make_training_env():
-    env = gym.make("ALE/Freeway-v5", frameskip=4, repeat_action_probability=0)
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
-    # No FireResetEnv — Freeway has no FIRE action
-    # No EpisodicLifeEnv — Freeway is a timed game (no lives)
+    env = FireResetEnv(env)
+    env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
+    env = ProximityRewardWrapper(
+        env, scale=PROXIMITY_SCALE, max_distance=PROXIMITY_MAX_DIST,
+        descend_threshold=PROXIMITY_DESCEND_THRESHOLD,
+    )
     env = Monitor(env)
     return env
 
 
 def make_eval_env():
-    env = gym.make("ALE/Freeway-v5", frameskip=4, repeat_action_probability=0)
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
+    env = FireResetEnv(env)
+    env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
@@ -96,8 +98,10 @@ def make_eval_env():
 
 
 def make_check_env():
-    env = gym.make("ALE/Freeway-v5", frameskip=4, repeat_action_probability=0)
+    env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = NoopResetEnv(env, noop_max=30)
+    env = FireResetEnv(env)
+    env = EpisodicLifeEnv(env)
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     env = Monitor(env)
@@ -108,12 +112,15 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Multi-Env Probe: Deterministic Freeway")
-    print(f"  Hypothesis: 3-action game with deterministic traffic -> SINGLE_SCRIPT or reactive?")
-    print(f"  Target: {TARGET_STEPS:,} steps (~2 hours)")
-    print(f"  Wrappers: NoopResetEnv only (no FIRE, no lives)")
-    print(f"  Note: Freeway is the minimal test — 3 actions, fixed car patterns")
+    print(f"{RUN_NAME} — Experiment 35b Phase 1: Step-Down (scale=0.05 for 15M)")
+    print(f"  Scale: {PROXIMITY_SCALE}, Max distance: {PROXIMITY_MAX_DIST}")
+    print(f"  Training: ALE/Breakout-v5 + ProximityRewardWrapper")
+    print(f"  Eval/Check: Standard Breakout (NO proximity reward)")
+    print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
+    print(f"  Phase 2 (PPO_132b) will continue at scale=0.0")
     print()
+
+    os.makedirs(CHECKPOINT_PATH, exist_ok=True)
 
     env = DummyVecEnv([make_training_env for _ in range(32)])
     env = VecFrameStack(env, n_stack=4)
@@ -123,26 +130,27 @@ if __name__ == "__main__":
 
     eval_callback = EvalCallback(
         eval_env, best_model_save_path=f"./models/{RUN_NAME}",
-        log_path=f"./logs/{RUN_NAME}", eval_freq=50_000,
+        log_path=f"./logs/{RUN_NAME}", eval_freq=100_000,
         n_eval_episodes=50, deterministic=True, render=False, verbose=1)
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=100_000, save_path=CHECKPOINT_PATH,
+        save_freq=156_250, save_path=CHECKPOINT_PATH,
         name_prefix="latest_checkpoint", save_replay_buffer=False, verbose=1)
 
     memorization_callback = MemorizationCheckCallback(
         run_name=RUN_NAME, sticky_actions=False, check_freq=1_000_000,
-        n_games=20, make_env_fn=make_check_env, check_deterministic_false=True,
+        n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
+        make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"FREEWAY_baseline — Multi-Env Probe",
-            f"Env: ALE/Freeway-v5 (deterministic traffic, 3 actions)",
-            f"No FireResetEnv, No EpisodicLifeEnv (timed game)",
-            f"Hypothesis: minimal action space -> easiest to memorize OR forces observation",
-            f"Policy: NatureCNN, ent_coef={ENT_COEF}",
+            f"PPO_132a — Experiment 35b Phase 1: Step-Down (scale=0.05 for 15M)",
+            f"Scale: {PROXIMITY_SCALE}, Max dist: {PROXIMITY_MAX_DIST}",
+            f"Training: ALE/Breakout-v5 + ProximityRewardWrapper",
+            f"Eval/Check: Standard Breakout (NO proximity reward)",
         ])
 
     label_callback = RunLabelCallback(RUN_NAME)
-    callbacks = CallbackList([eval_callback, checkpoint_callback, memorization_callback, label_callback])
+    callbacks = CallbackList([eval_callback, checkpoint_callback,
+                              memorization_callback, label_callback])
 
     resume_path = get_latest_checkpoint(CHECKPOINT_PATH)
     if resume_path:
