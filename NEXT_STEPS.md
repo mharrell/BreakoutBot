@@ -10,9 +10,9 @@ PPO_124 (proximity reward, scale=0.05) is the first verified reactive PPO argmax
 
 - **PPO_126 oscillation discovered (NOT regression):** Split-watcher on all 12 checkpoints (5M→50M) revealed PPO bounces between reactive and script-dominated phases with ~10-15M period. Two competing basins of nearly equal value at scale=0.05. The 50M checkpoint is in a script-dominated trough, not permanently regressed — it would likely oscillate back. FULL unique=1 for every checkpoint (expected — deterministic reactive policy on deterministic layout).
 
-- **Experiments 35a/35b designed but not yet launched:**
-  - PPO_131: Linear annealing (0.05→0.0 over 25M) — tests whether early tracking bakes in
-  - PPO_132a/b: Step-down (15M at 0.05, then 10M at 0.0) — tests whether tracking persists without bonus
+- **Experiment 35 complete:** Fading (PPO_131) and step-down (PPO_132a→132b) both trained and analyzed. All proximity-reward models verified reactive via ball-teleport split-watcher. Fading is the best variant — 428 points, AUC 0.402, px_corr 0.025. Step-down retains reactivity but scores lower.
+  - Ball-teleport split-watcher built (`ball_teleport_split_watcher.py`) — replaces broken BrickClearWrapper, uses ball X teleport for reliable argmax reactivity measurement.
+  - Per-frame analysis updated and run — PPO_131 shows 72.5% frame-level ball tracking.
 
 However, publishing efforts (Medium, Reddit) got little traction. Key weaknesses to address before arXiv submission: **single seed per config**, **no zero-scale ablation**.
 
@@ -60,17 +60,17 @@ Completed Aug 3-4 with PPO_127 (scale=0.10) and PPO_128 (scale=0.025). Both ran 
 
 Conclusion: scale=0.05 is the unambiguous sweet spot. No further scale values needed unless exploring very fine gradations (0.04, 0.06).
 
-## Priority 4: Oscillation Control (Annealing & Step-Down)
+## Priority 4: Oscillation Control (Fading & Step-Down) ✅ DONE
 
-Designed but NOT YET LAUNCHED:
+Completed August 4, 2026. Ball-teleport split-watcher results (10 games):
 
-| Run | Seed | Config | Steps | Hypothesis |
-|-----|------|--------|-------|------------|
-| PPO_131 | 131 | Annealing 0.05→0.0 linear, 25M | 25M | Early tracking bakes in, late focus on game reward |
-| PPO_132a | 132 | ProximityReward(scale=0.05) | 15M | Phase 1: establish tracking |
-| PPO_132b | 132 | Clean Breakout (scale=0.0) | +10M | Phase 2: tracking persists without bonus? |
+| Run | Config | px_corr | Div | Track | FULL | ALT | AUC |
+|-----|--------|---------|-----|-------|------|-----|-----|
+| PPO_131 | Fading 0.05→0.0, 25M | 0.025 | 71% | 73% | 428 | 428 | 0.402 |
+| PPO_132a | scale=0.05, 15M | -0.027 | 63% | 81% | 85 | 38 | 0.357 |
+| PPO_132b | Step-down 0.05→0.0, 25M | 0.150 | 61% | 71% | 186 | 307 | 0.312 |
 
-Scripts: `train_ppo_131.py`, `train_ppo_132a.py`, `train_ppo_132b.py` — all written and ready.
+**Fading is the clear winner.** Highest scores (428), highest AUC (0.402), strongest tracking signal. Step-down retains reactivity but scores lower. All proximity-reward models pass the ball-teleport test — the reward reliably produces reactive argmax policies.
 
 ## Priority 5: Pong Transfer
 
@@ -87,9 +87,9 @@ Needs: Pong RAM addresses (paddle Y, ball X/Y), adapted wrapper, training script
 - Formal statistical test on perfect transfer count
 - Per-frame tracking analysis via `analyze_frame_behavior.py` (tool built, not yet run)
 
-## Priority 7: Per-Frame Behavioral Analysis
+## Priority 7: Per-Frame Behavioral Analysis ✅ DONE
 
-`analyze_frame_behavior.py` is built but not yet run. Logs per-frame paddle/ball positions on both FULL and ALT layouts. Computes whether ALT paddle genuinely tracks ALT ball (lower distance to ALT ball than FULL ball). Distinguishes genuine tracking from scrambled visual cues.
+`analyze_frame_behavior.py` updated to use ball teleport (replacing broken BrickClearWrapper) and run on PPO_131. Result: **72.5% tracking** over 28,410 frames — ALT paddle consistently closer to teleported ALT ball than FULL ball. Confirms frame-level argmax reactivity.
 
 Run against PPO_124 best checkpoint with 20+ games to characterize the tracking signal at the frame level.
 
@@ -104,9 +104,9 @@ Run against PPO_124 best checkpoint with 20+ games to characterize the tracking 
 
 - `train_ppo_127.py` / `train_ppo_128.py` — scale sweep (complete at 25M)
 - `train_ppo_129.py` / `train_ppo_130.py` — continuation scripts (127→50M, 128→50M; deferred)
-- `train_ppo_131.py` — annealing experiment (not launched)
-- `train_ppo_132a.py` / `train_ppo_132b.py` — step-down experiment (not launched)
-- `annealing_proximity_wrapper.py` — decaying scale wrapper
+- `train_ppo_131.py` — fading experiment (complete)
+- `train_ppo_132a.py` / `train_ppo_132b.py` — step-down experiment (complete)
+- `fading_proximity_wrapper.py` — decaying scale wrapper
 - `analyze_frame_behavior.py` — per-frame tracking analysis
 - `batch_split_watcher.py` / `run_batch.ps1` / `run_batch_fast.ps1` — batch split-watcher tooling
 

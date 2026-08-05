@@ -1,5 +1,5 @@
 """
-PPO_131 — Experiment 35a: Proximity Reward Linear Annealing
+PPO_131 — Experiment 35a: Proximity Reward Linear Fading
 
 Scale decays linearly from 0.05 to 0.0 over 25M steps. Tests whether
 establishing ball-tracking early (when scale is high) then removing the
@@ -11,7 +11,7 @@ bonus in later training, the model focuses purely on brick-clearing while
 retaining the tracking behavior it learned early.
 
 Design:
-  - Training: ALE/Breakout-v5 + AnnealingProximityRewardWrapper(0.05→0.0)
+  - Training: ALE/Breakout-v5 + FadingProximityRewardWrapper(0.05→0.0)
   - Eval/Check: Standard Breakout (NO proximity reward) — transfer test
   - FROM SCRATCH (seed=131)
   - Target: 25M steps
@@ -31,7 +31,7 @@ from stable_baselines3.common.atari_wrappers import ClipRewardEnv, NoopResetEnv,
 from memorization_check_callback import MemorizationCheckCallback
 from autoreset_wrapper import AutoResetWrapper
 from run_label_callback import RunLabelCallback
-from annealing_proximity_wrapper import AnnealingProximityRewardWrapper
+from fading_proximity_wrapper import FadingProximityRewardWrapper
 
 import ale_py
 gym.register_envs(ale_py)
@@ -98,7 +98,7 @@ class ScaleUpdateCallback(BaseCallback):
 
     def _update_wrappers(self, env, progress):
         while env is not None:
-            if isinstance(env, AnnealingProximityRewardWrapper):
+            if isinstance(env, FadingProximityRewardWrapper):
                 env.progress_remaining = progress
             env = getattr(env, 'env', None)
 
@@ -112,7 +112,7 @@ def make_training_env():
     env = GrayscaleResize(env, width=84, height=84)
     env = ClipRewardEnv(env)
     scale_fn = lambda p: FINAL_SCALE + (INITIAL_SCALE - FINAL_SCALE) * p
-    env = AnnealingProximityRewardWrapper(
+    env = FadingProximityRewardWrapper(
         env, scale_schedule=scale_fn,
         max_distance=PROXIMITY_MAX_DIST,
         descend_threshold=PROXIMITY_DESCEND_THRESHOLD,
@@ -150,10 +150,10 @@ def make_check_env():
 
 
 if __name__ == "__main__":
-    print(f"{RUN_NAME} — Experiment 35a: Proximity Reward Linear Annealing")
+    print(f"{RUN_NAME} — Experiment 35a: Proximity Reward Linear Fading")
     print(f"  Scale: {INITIAL_SCALE} -> {FINAL_SCALE} over {TARGET_STEPS:,} steps")
     print(f"  Max distance: {PROXIMITY_MAX_DIST}, Threshold: ball_y > {PROXIMITY_DESCEND_THRESHOLD}")
-    print(f"  Training: ALE/Breakout-v5 + AnnealingProximityRewardWrapper")
+    print(f"  Training: ALE/Breakout-v5 + FadingProximityRewardWrapper")
     print(f"  Eval/Check: Standard Breakout (NO proximity reward)")
     print(f"  FROM SCRATCH (seed={SEED}), target {TARGET_STEPS:,} steps")
     print()
@@ -180,9 +180,9 @@ if __name__ == "__main__":
         n_games=20, max_check_steps=5_000_000, max_steps_per_game=10_000,
         make_env_fn=make_check_env, check_deterministic_false=True,
         summary_lines=[
-            f"PPO_131 — Experiment 35a: Proximity Reward Linear Annealing",
+            f"PPO_131 — Experiment 35a: Proximity Reward Linear Fading",
             f"Scale: {INITIAL_SCALE} -> {FINAL_SCALE} over {TARGET_STEPS:,} steps",
-            f"Training: ALE/Breakout-v5 + AnnealingProximityRewardWrapper",
+            f"Training: ALE/Breakout-v5 + FadingProximityRewardWrapper",
             f"Eval/Check: Standard Breakout (NO proximity reward)",
         ])
 

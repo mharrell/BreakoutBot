@@ -1,5 +1,5 @@
 """
-AnnealingProximityRewardWrapper — proximity reward with decaying scale.
+FadingProximityRewardWrapper — proximity reward with decaying scale.
 
 Same as ProximityRewardWrapper but scales the bonus by a schedule function
 that decreases over training. This lets the proximity reward shape early
@@ -10,8 +10,8 @@ import numpy as np
 import gymnasium as gym
 
 
-class AnnealingProximityRewardWrapper(gym.Wrapper):
-    """Proximity reward with decaying scale.
+class FadingProximityRewardWrapper(gym.Wrapper):
+    """Proximity reward with fading scale.
 
     Parameters
     ----------

@@ -1,26 +1,34 @@
 """
-Per-frame behavioral analysis using ball teleport instead of brick clearing.
+Split-watcher using ball teleport instead of brick clearing.
 
-Ball teleport is reliable (ball RAM writes stick) while brick clearing is not
-(the game engine regenerates brick display data from internal state every frame).
+BrickClearWrapper is unreliable — the game engine regenerates brick display
+data from internal state every frame. Ball teleport avoids this entirely:
+after the ball is launched, teleport it to a different X position on the
+ALT side. Both sides see the SAME bricks, but the ball is at a different X.
+A reactive policy tracks the diverged ball; a script ignores it.
 
-After FIRE on both sides, teleports the ALT ball by +30px X. Both sides see the
-same bricks, but the ball is at different X positions. A reactive policy tracks
-the diverged ball; a script ignores it.
-
-Key per-frame metric: alt_tracks_alt_better
-  = 1 if ALT paddle is closer to ALT ball than to FULL ball
-  = genuine ball-tracking signal at the frame level
+This measures the same thing as the brick split-watcher: does the argmax
+track the ball position? But it's more reliable because ball RAM writes
+actually stick (unlike brick RAM which regenerates).
 
 Usage:
-    python analyze_frame_behavior.py --model ./models/PPO_131/final_model.zip --games 5
+    python ball_teleport_split_watcher.py --model ./models/PPO_131/final_model.zip --games 20
+
+Output columns (per game, per frame):
+    game, layout, frame, full_act, alt_act,
+    full_px, full_bx, full_by,
+    alt_px, alt_bx, alt_by,
+    full_pb_dist, alt_pb_dist,
+    alt_tracks_diverged_ball
 """
 import sys
 import re
+import os
 import numpy as np
 import gymnasium as gym
 from stable_baselines3 import PPO
 from stable_baselines3.common.atari_wrappers import FireResetEnv, EpisodicLifeEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 import cv2
 import ale_py
 gym.register_envs(ale_py)
@@ -29,7 +37,8 @@ BALL_X, BALL_Y, PADDLE_X = 99, 101, 72
 NOOP, FIRE, RIGHT, LEFT = 0, 1, 2, 3
 
 
-def make_env():
+def make_env(teleport_x=None):
+    """Build a raw Breakout env WITHOUT NoopResetEnv."""
     env = gym.make("ALE/Breakout-v5", frameskip=4, repeat_action_probability=0)
     env = FireResetEnv(env)
     env = EpisodicLifeEnv(env)
@@ -54,50 +63,51 @@ def update_frame_stack(fs, obs):
     return fs
 
 
+def apply_teleport(env, offset_x):
+    """Teleport the ball X by offset_x pixels. Reads current ball_x, adds offset, writes back."""
+    ball_x = int(get_ram(env)[BALL_X])
+    new_x = max(10, min(150, ball_x + offset_x))
+    env.unwrapped.ale.setRAM(BALL_X, new_x)
+    return new_x
+
+
 if __name__ == "__main__":
     MODEL_PATH = "./models/PPO_131/final_model.zip"
-    N_GAMES = 10
-    TELEPORT_OFFSET = 30
+    N_GAMES = 20
+    TELEPORT_OFFSET = 30  # pixels to shift ball on ALT side
     MAX_FRAMES = 10000
-    OUTPUT = None
+    OUTPUT_DIR = "recordings/split_watcher_batch"
 
     args = sys.argv[1:]
     i = 0
     while i < len(args):
         if args[i] == "--model": MODEL_PATH = args[i + 1]; i += 2
         elif args[i] == "--games": N_GAMES = int(args[i + 1]); i += 2
-        elif args[i] == "--output": OUTPUT = args[i + 1]; i += 2
         elif args[i] == "--offset": TELEPORT_OFFSET = int(args[i + 1]); i += 2
+        elif args[i] == "--output-dir": OUTPUT_DIR = args[i + 1]; i += 2
         else: i += 1
-
-    if OUTPUT is None:
-        m = re.search(r"PPO_\d+[a-z]?", MODEL_PATH)
-        run_name = m.group(0) if m else "model"
-        OUTPUT = f"recordings/{run_name}_frame_analysis.csv"
 
     m = re.search(r"PPO_\d+[a-z]?", MODEL_PATH)
     run_name = m.group(0) if m else "model"
 
-    # Load model — no env needed for predict-only
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # Load model — no env needed for predict-only usage
     model = PPO.load(MODEL_PATH, device="cuda")
 
-    print(f"Per-Frame Behavioral Analysis (Ball Teleport) — {run_name}")
+    print(f"Ball-Teleport Split-Watcher — {run_name}")
     print(f"  Model: {MODEL_PATH} @ {model.num_timesteps:,} steps")
     print(f"  Games: {N_GAMES}")
     print(f"  Teleport offset: +/-{TELEPORT_OFFSET}px")
-    print(f"  Output: {OUTPUT}")
     print()
 
-    # CSV header
-    csv_lines = ["game,frame,full_act,alt_act,"
-                 "full_px,full_bx,full_by,"
-                 "alt_px,alt_bx,alt_by,"
-                 "full_pb_dist,alt_pb_dist,"
-                 "alt_to_full_ball_dist,"
-                 "alt_tracks_alt_better"]
-
+    # Summary accumulators
+    px_correlations = []
+    action_divergences = []
+    full_scores = []
+    alt_scores = []
+    tracking_frames_total = 0
     total_frames_all = 0
-    tracking_frames_all = 0
 
     for game_idx in range(N_GAMES):
         env_full = make_env()
@@ -115,16 +125,16 @@ if __name__ == "__main__":
         fs_full = update_frame_stack(fs_full, obs_full)
         fs_alt = update_frame_stack(fs_alt, obs_alt)
 
-        # Wait for ball to descend, then teleport ALT ball
+        # Wait for ball to be in play, then teleport on ALT side
         teleported = False
         for _ in range(20):
             full_ram = get_ram(env_full)
             alt_ram = get_ram(env_alt)
             if int(full_ram[BALL_Y]) < 180 and not teleported:
-                alt_bx = int(alt_ram[BALL_X])
-                new_bx = max(10, min(150, alt_bx + TELEPORT_OFFSET))
-                env_alt.unwrapped.ale.setRAM(BALL_X, new_bx)
+                # Ball is in play — teleport ALT ball
+                new_bx = apply_teleport(env_alt, TELEPORT_OFFSET)
                 teleported = True
+
             if not teleported:
                 obs_full, _, _, _, _ = env_full.step(NOOP)
                 obs_alt, _, _, _, _ = env_alt.step(NOOP)
@@ -133,14 +143,19 @@ if __name__ == "__main__":
             else:
                 break
 
+        # Track per-frame data
+        full_px_list, alt_px_list = [], []
+        full_act_list, alt_act_list = [], []
+        full_score, alt_score = 0, 0
         done_full, done_alt = False, False
         frame = 0
-        full_score, alt_score = 0, 0
+        game_tracking = 0
+        game_frames = 0
 
         while not (done_full and done_alt) and frame < MAX_FRAMES:
             frame += 1
 
-            # Predict independently
+            # Predict independently per side
             if not done_full:
                 left_obs = np.expand_dims(fs_full, axis=0)
                 left_action, _ = model.predict(left_obs, deterministic=True)
@@ -161,35 +176,24 @@ if __name__ == "__main__":
 
             full_px = int(full_ram[PADDLE_X]) if full_ram is not None else -1
             full_bx = int(full_ram[BALL_X]) if full_ram is not None else -1
-            full_by = int(full_ram[BALL_Y]) if full_ram is not None else -1
             alt_px = int(alt_ram[PADDLE_X]) if alt_ram is not None else -1
             alt_bx = int(alt_ram[BALL_X]) if alt_ram is not None else -1
             alt_by = int(alt_ram[BALL_Y]) if alt_ram is not None else -1
 
-            # Distances
-            full_dist = abs(full_px - full_bx) if (full_ram is not None) else -1
-            alt_dist = abs(alt_px - alt_bx) if (alt_ram is not None) else -1
-            alt_to_full_ball = abs(alt_px - full_bx) if (alt_ram is not None and full_ram is not None) else -1
+            if full_px >= 0:
+                full_px_list.append(full_px)
+                full_act_list.append(left_act)
+            if alt_px >= 0:
+                alt_px_list.append(alt_px)
+                alt_act_list.append(right_act)
 
-            # Tracking: ALT paddle closer to ALT ball than to FULL ball?
-            # Only measure when ball is in play (not being served)
-            tracks_alt = 0
-            if (full_ram is not None and alt_ram is not None
-                    and full_by < 180 and alt_by < 180):
-                if alt_dist >= 0 and alt_to_full_ball >= 0 and alt_dist < alt_to_full_ball:
-                    tracks_alt = 1
-                    tracking_frames_all += 1
-
-            if full_ram is not None and alt_ram is not None and full_by < 180 and alt_by < 180:
-                total_frames_all += 1
-
-            csv_lines.append(
-                f"{game_idx + 1},{frame},{left_act},{right_act},"
-                f"{full_px},{full_bx},{full_by},"
-                f"{alt_px},{alt_bx},{alt_by},"
-                f"{full_dist},{alt_dist},{alt_to_full_ball},"
-                f"{tracks_alt}"
-            )
+            # Tracking signal: is ALT paddle closer to ALT ball than FULL ball?
+            if full_ram is not None and alt_ram is not None and alt_by < 180:
+                alt_to_alt_ball = abs(alt_px - alt_bx)
+                alt_to_full_ball = abs(alt_px - full_bx)
+                if alt_to_alt_ball < alt_to_full_ball:
+                    game_tracking += 1
+                game_frames += 1
 
             # Step FULL
             if not done_full:
@@ -207,6 +211,7 @@ if __name__ == "__main__":
                     else:
                         obs, info = env_full.reset()
                         fs_full = initial_frame_stack(obs)
+                        # Re-FIRE
                         obs, _, _, _, _ = env_full.step(FIRE)
                         fs_full = update_frame_stack(fs_full, obs)
                         continue
@@ -235,8 +240,7 @@ if __name__ == "__main__":
                         for _ in range(10):
                             ram = get_ram(env_alt)
                             if int(ram[BALL_Y]) < 180:
-                                bx = int(ram[BALL_X])
-                                env_alt.unwrapped.ale.setRAM(BALL_X, max(10, min(150, bx + TELEPORT_OFFSET)))
+                                apply_teleport(env_alt, TELEPORT_OFFSET)
                                 break
                             obs, _, _, _, _ = env_alt.step(NOOP)
                             fs_alt = update_frame_stack(fs_alt, obs)
@@ -247,24 +251,63 @@ if __name__ == "__main__":
         env_full.close()
         env_alt.close()
 
-        pct = tracking_frames_all / total_frames_all * 100 if total_frames_all > 0 else 0
+        # Compute metrics for this game
+        min_len = min(len(full_px_list), len(alt_px_list))
+        if min_len > 1:
+            full_arr = np.array(full_px_list[:min_len])
+            alt_arr = np.array(alt_px_list[:min_len])
+            corr = np.corrcoef(full_arr, alt_arr)[0, 1]
+            px_correlations.append(corr)
+
+            act_div = sum(1 for a, b in zip(full_act_list[:min_len], alt_act_list[:min_len]) if a != b)
+            action_divergences.append(act_div / min_len * 100)
+        else:
+            px_correlations.append(1.0)
+            action_divergences.append(0.0)
+
+        full_scores.append(full_score)
+        alt_scores.append(alt_score)
+        tracking_frames_total += game_tracking
+        total_frames_all += game_frames
+
+        pct_tracking = game_tracking / game_frames * 100 if game_frames > 0 else 0
         print(f"  Game {game_idx + 1:2d}: FULL={int(full_score)} ALT={int(alt_score)} | "
-              f"frames={frame} | tracking={pct:.0f}% so far")
+              f"px_corr={px_correlations[-1]:.4f} | div={action_divergences[-1]:.1f}% | "
+              f"tracks={pct_tracking:.0f}%")
 
-    # Write CSV
-    with open(OUTPUT, "w") as f:
-        f.write("\n".join(csv_lines) + "\n")
+    # Overall verdict
+    print()
+    print("=" * 70)
+    print("OVERALL VERDICT")
+    print("=" * 70)
+    n = len(px_correlations)
+    perfect_transfers = sum(1 for c in px_correlations if c > 0.99)
+    avg_div = np.mean(action_divergences) if action_divergences else 0
+    avg_px_corr = np.mean(px_correlations) if px_correlations else 1.0
+    avg_tracking = tracking_frames_total / total_frames_all * 100 if total_frames_all > 0 else 0
 
-    # Summary
-    pct_tracking = tracking_frames_all / total_frames_all * 100 if total_frames_all > 0 else 0
+    print(f"  Games run: {n}")
+    print(f"  Perfect paddle correlation (px_corr > 0.99): {perfect_transfers}/{n}")
+    print(f"  Avg px_corr: {avg_px_corr:.4f}")
+    print(f"  Avg action divergence: {avg_div:.1f}%")
+    print(f"  Avg tracking (ALT paddle closer to ALT ball): {avg_tracking:.1f}%")
+    print(f"  Avg FULL score: {np.mean(full_scores):.1f}")
+    print(f"  Avg ALT score:  {np.mean(alt_scores):.1f}")
     print()
-    print(f"  Total frames: {total_frames_all:,}")
-    print(f"  Tracking frames (ALT paddle closer to ALT ball): {tracking_frames_all:,} ({pct_tracking:.1f}%)")
-    print(f"  Saved to: {OUTPUT}")
-    print()
-    if pct_tracking > 60:
-        print("  VERDICT: REACTIVE — ALT paddle genuinely tracks the teleported ball.")
-    elif pct_tracking > 40:
-        print("  VERDICT: MODERATE TRACKING — some reactivity, some scripting.")
+
+    if perfect_transfers == n:
+        print("  VERDICT: MEMORIZED")
+        print("  Paddle positions are identical on every game despite ball teleport.")
+        print("  This is a memorized script — the policy ignores the ball position.")
+    elif avg_tracking > 60:
+        print("  VERDICT: REACTIVE")
+        print(f"  ALT paddle tracks the teleported ball {avg_tracking:.0f}% of the time.")
+        print("  The argmax genuinely responds to ball position.")
+    elif perfect_transfers == 0 and avg_div > 30:
+        print("  VERDICT: LIKELY REACTIVE (moderate divergence)")
+        print(f"  No perfect transfers, {avg_div:.0f}% divergence, {avg_tracking:.0f}% tracking.")
+        print("  Run more games or verify with full analysis.")
     else:
-        print("  VERDICT: MEMORIZED — ALT paddle ignores the ball position.")
+        print("  VERDICT: INCONCLUSIVE")
+        print(f"  {perfect_transfers}/{n} perfect transfers, {avg_div:.0f}% divergence.")
+        print("  Mixed signal — run more games or use intervention probe.")
